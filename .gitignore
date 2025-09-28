@@ -1,0 +1,9 @@
+.env
+*.json
+!package.json
+node_modules
+npm-debug.log*
+.yarn*
+.DS_Store
+node_modules/
+
