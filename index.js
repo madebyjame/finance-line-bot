@@ -155,10 +155,25 @@ app.get('/webhook', (req, res) => {
   res.status(200).send('OK');
 });
 
-// โหมดผ่าน Verify ชัวร์: ตอบ 200 ก่อน ไม่ตรวจลายเซ็นชั่วคราว
-app.post('/webhook', (req, res) => {
-  res.sendStatus(200);
+// ปลอดภัย + ไม่ timeout: ตรวจลายเซ็นด้วย middleware และตอบ 200 ทันที
+app.post('/webhook', middleware(lineConfig), (req, res) => {
+  try {
+    // ตอบกลับ LINE ให้ไวก่อน
+    res.sendStatus(200);
+
+    // ประมวลผลต่อหลังบ้าน แบบไม่บล็อกการตอบ
+    const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
+    const events = Array.isArray(body.events) ? body.events : [];
+
+    Promise.all(events.map(e => handleEvent(e)))
+      .catch(err => {
+        console.error('handleEvent error:', err?.response?.data || err.message || err);
+      });
+  } catch (err) {
+    console.error('webhook handler crash:', err);
+  }
 });
+
 
 app.get('/', (req, res) => {
   res.send('Line Finance Bot is running');
