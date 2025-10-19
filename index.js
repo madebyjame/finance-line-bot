@@ -1,11 +1,10 @@
-// สร้างไฟล์ service account ชั่วคราวจาก ENV (ใช้ได้กับ Railway)
 const fs = require("fs");
-
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
   const path = "/tmp/google.json";
   fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
   process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
 }
+
 
 require('dotenv').config();
 const express = require('express');
@@ -156,11 +155,19 @@ app.get('/webhook', (req, res) => {
   res.status(200).send('OK');
 });
 
-app.post('/webhook', middleware(lineConfig), async (req, res) => {
-  const events = req.body.events || [];
-  const results = await Promise.all(events.map(handleEvent));
-  res.json(results);
+// ตรง route นี้ ให้ตอบ 200 ทันที แล้วค่อยทำงานต่อแบบ async
+app.post('/webhook', middleware(lineConfig), (req, res) => {
+  // ตอบกลับ LINE ทันที เพื่อไม่ให้ timeout
+  res.status(200).end();
+
+  // ค่อยไปประมวลผลอีเวนต์ต่อหลังบ้าน
+  const events = Array.isArray(req.body?.events) ? req.body.events : [];
+  Promise.all(events.map(handleEvent))
+    .catch(err => {
+      console.error('handleEvent error:', err?.response?.data || err);
+    });
 });
+
 
 app.get('/', (req, res) => {
   res.send('Line Finance Bot is running');
