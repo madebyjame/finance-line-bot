@@ -19,10 +19,11 @@ const lineConfig = {
 };
 const lineClient = new Client(lineConfig);
 
-// ====== THEME ======
+// ===== THEME (Modern UI) =====
 const THEME = {
   accent: '#4F46E5',       // indigo-600
   accentSoft: '#EEF2FF',   // indigo-50
+  danger: '#EF4444',       // red-500
   textMuted: '#8B95A1',
   textStrong: '#111827',
 };
@@ -68,39 +69,77 @@ async function appendRow(values) {
   });
 }
 
-async function readAllRows() {
+async function readRecentRows(limit = 120) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: SHEET_RANGE
   });
   const rows = res.data.values || [];
   const dataRows = rows.length > 1 ? rows.slice(1) : [];
-  return dataRows; // [วันที่, ประเภท, จำนวน, หมวดหมู่, รายละเอียด]
+  return dataRows.slice(-limit);
 }
 
-async function readRecentRows(limit = 120) {
-  const rows = await readAllRows();
-  return rows.slice(-limit);
+// -------- Helpers: Date / Format --------
+function todayTH() {
+  return new Date().toLocaleDateString('th-TH');
 }
 
-// -------- Utils: Date parsing (th-TH) --------
-function parseThaiDate(d) {
-  if (!d || typeof d !== 'string') return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(d);
-  const m = d.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-  if (m) {
-    let dd = parseInt(m[1], 10);
-    let mm = parseInt(m[2], 10);
-    let yyyy = parseInt(m[3], 10);
-    if (yyyy > 2400) yyyy -= 543; // พ.ศ. -> ค.ศ.
-    return new Date(yyyy, mm - 1, dd);
+// -------- Classifier: Type & Category (TH) --------
+const KW = {
+  income: [ 'รายรับ','รับ','ได้','โอนเข้า','เงินเดือน','โบนัส','ทิป','ขายได้','ดอกเบี้ย','ปันผล' ],
+  expense: [ 'รายจ่าย','จ่าย','ซื้อ','โอนออก','เติม','ค่าผ่อน','ผ่อน','ค่าสมาชิก','ค่าใช้จ่าย' ],
+};
+
+const CATS_EXPENSE = [
+  { name: 'อาหาร/กาแฟ', kws: ['ข้าว','อาหาร','ข้าวเที่ยง','ข้าวเย็น','ของกิน','กาแฟ','คาเฟ่','ชานม','ของหวาน','ส้มตำ','ก๋วยเตี๋ยว','หมูกระทะ'] },
+  { name: 'เดินทาง', kws: ['รถ','น้ำมัน','เติมน้ำมัน','มอเตอร์ไซค์','แท็กซี่','แกร็บ','บีทีเอส','mrt','ตั๋ว','ค่าทางด่วน','ที่จอด'] },
+  { name: 'บิล/สาธารณูปโภค', kws: ['ค่าไฟ','ค่าน้ำ','ค่าเน็ต','เน็ตบ้าน','โทรศัพท์','ค่าโทร','ค่าสาธารณูปโภค','ค่าเช่า','ค่าเช่าบ้าน','คอนโด','ค่าบ้าน'] },
+  { name: 'ช้อปปิ้ง/ของใช้', kws: ['ช้อป','สั่งของ','shopee','lazada','tiktok','เสื้อ','กางเกง','รองเท้า','ของใช้','อุปกรณ์','แก็ดเจ็ต'] },
+  { name: 'สุขภาพ/ประกัน', kws: ['ยา','โรงพยาบาล','คลินิก','ประกัน','ฟิตเนส','ตรวจสุขภาพ','วิตามิน'] },
+  { name: 'การศึกษา/งาน', kws: ['คอร์ส','เรียน','หนังสือ','หลักสูตร','อบรม','ค่าสอบ','ซอฟต์แวร์','ไลเซนส์','microsoft','adobe'] },
+  { name: 'บันเทิง', kws: ['หนัง','netflix','spotify','เกม','สตรีม','คอนเสิร์ต'] },
+];
+
+const CATS_INCOME = [
+  { name: 'เงินเดือน', kws: ['เงินเดือน','salary','เดือนนี้','ค่าจ้าง'] },
+  { name: 'โบนัส/ทิป', kws: ['โบนัส','bonus','ทิป','tip'] },
+  { name: 'ขายของ', kws: ['ขาย','ยอดขาย','ออเดอร์','commission','ค่าคอม'] },
+  { name: 'การเงิน/ลงทุน', kws: ['ดอกเบี้ย','ปันผล','หุ้น','คริปโต'] }
+];
+
+function normalize(s) { return String(s || '').toLowerCase(); }
+
+function extractAmount(text) {
+  const m = String(text).match(/(\d{1,3}(?:[, ]\d{3})*|\d+)(?:[.,](\d{1,2}))?/);
+  if (!m) return null;
+  const num = (m[1] || '').replace(/[ ,]/g, '');
+  const dec = m[2] ? '.' + m[2] : '';
+  const val = Number(num + dec);
+  return Number.isFinite(val) ? val : null;
+}
+
+function detectType(text) {
+  const t = normalize(text);
+  const isIncome = KW.income.some(k => t.includes(k.toLowerCase()));
+  const isExpense = KW.expense.some(k => t.includes(k.toLowerCase()));
+  if (isIncome && !isExpense) return 'รายรับ';
+  if (isExpense && !isIncome) return 'รายจ่าย';
+  if (t.includes('เงินเดือน') || t.includes('ได้') || t.includes('รับ')) return 'รายรับ';
+  return 'รายจ่าย';
+}
+
+function detectCategory(text, type) {
+  const t = normalize(text);
+  const list = type === 'รายรับ' ? CATS_INCOME : CATS_EXPENSE;
+  for (const cat of list) {
+    if (cat.kws.some(k => t.includes(k.toLowerCase()))) return cat.name;
   }
-  const t = new Date(d);
-  return isNaN(t.getTime()) ? null : t;
+  return 'อื่นๆ';
 }
 
-function startOfToday() { const t = new Date(); t.setHours(0,0,0,0); return t; }
-function addDays(date, days) { const d = new Date(date); d.setDate(d.getDate()+days); return d; }
+function stripNote(text) {
+  return text.replace(/\s*(รายรับ|รายจ่าย)\b/gi, '').trim();
+}
 
 // -------- Gemini --------
 const ENV_MODEL = (process.env.GEMINI_MODEL || '').trim();
@@ -144,7 +183,9 @@ async function callGeminiModel({ model, apiKey, prompt }) {
 
 async function analyzeWithGemini() {
   const rows = await readRecentRows(120);
-  if (rows.length === 0) return 'ยังไม่มีข้อมูล ลองพิมพ์ "รายจ่าย 120 คาเฟ่" ก่อนนะ';
+  if (rows.length === 0) {
+    return 'ยังไม่มีข้อมูล ลองพิมพ์ "รายจ่าย 120 คาเฟ่" ก่อนนะ';
+  }
 
   const lines = rows.map(r => {
     const [date, type, amount, category] = r;
@@ -172,163 +213,107 @@ ${lines}
     } catch (e) {
       const status = e?.response?.status;
       if (status === 404) continue;
-      if ([503,502,504,500,429].includes(status)) continue;
+      if (status === 503 || status === 502 || status === 504 || status === 500 || status === 429) continue;
       return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
     }
   }
   return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
 }
 
-// ====== Dashboard (Pie via Flex + QuickChart) ======
-const RANGE_PRESETS = {
-  all: { label: 'All Time', days: null },
-  '1y': { label: 'Year', days: 365 },
-  '6m': { label: '6 Month', days: 182 },
-  '3m': { label: '3 Month', days: 91 },
-  '1m': { label: '1 Month', days: 30 },
-  '1w': { label: '1 Week', days: 7 },
-};
-
-function summarizeExpenses(rows, fromDate) {
-  const map = new Map();
-  let total = 0;
-  for (const r of rows) {
-    const [dateStr, type, amountRaw, categoryRaw] = r;
-    const d = parseThaiDate(String(dateStr || '').trim());
-    if (!d) continue;
-    if (fromDate && d < fromDate) continue;
-    if (String(type).trim() !== 'รายจ่าย') continue;
-    const amt = Number(String(amountRaw).toString().replace(/,/g, '')) || 0;
-    const cat = (String(categoryRaw || '').trim()) || 'อื่นๆ';
-    if (amt <= 0) continue;
-    map.set(cat, (map.get(cat) || 0) + amt);
-    total += amt;
-  }
-  const entries = [...map.entries()].sort((a,b) => b[1]-a[1]);
-  const TOP = 6;
-  const top = entries.slice(0, TOP);
-  const othersSum = entries.slice(TOP).reduce((s, [,v]) => s+v, 0);
-  if (othersSum > 0) top.push(['อื่นๆ', othersSum]);
-  const labels = top.map(([k]) => k);
-  const data = top.map(([,v]) => Math.round(v));
-  const topName = labels[0] || '-';
-  const topAmt = data[0] || 0;
-  return { labels, data, total, topName, topAmt };
-}
-
-function buildQuickChartUrl({ labels, data, title }) {
-  const cfg = {
-    type: 'pie',
-    data: { labels, datasets: [{ data }] },
-    options: { plugins: { legend: { position: 'bottom' }, title: { display: true, text: title } } }
-  };
-  const encoded = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${encoded}&backgroundColor=white&width=1000&height=640&format=png`;
-}
-
-function rangeFromKey(key) {
-  const k = RANGE_PRESETS[key] ? key : '1m';
-  const preset = RANGE_PRESETS[k];
-  const today = startOfToday();
-  const from = preset.days ? addDays(today, -preset.days) : null;
-  return { key: k, label: preset.label, from };
-}
-
-function chip(text, colorBg = THEME.accentSoft, colorText = THEME.accent) {
+// -------- Flex UI Builders --------
+function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   return {
-    type: 'box', layout: 'baseline', backgroundColor: colorBg, cornerRadius: '12px', paddingAll: '6px',
-    contents: [{ type: 'text', text, size: '12px', weight: 'bold', color: colorText }]
+    type: 'box', layout: 'baseline', backgroundColor: bg, cornerRadius: '12px', paddingAll: '6px',
+    contents: [{ type: 'text', text, size: '12px', weight: 'bold', color }]
   };
 }
 
-function stat(label, value) {
+function confirmFlex({ type, amount, category, note, date, payload }) {
+  const isIncome = type === 'รายรับ';
+  const title = isIncome ? 'บันทึกรายรับ?' : 'บันทึกรายจ่าย?';
+  const icon = isIncome ? '💸' : '🧾';
+  const amountTxt = `${amount.toLocaleString()} บ.`;
+  const chips = [ chip(type), chip(category) ];
+
   return {
-    type: 'box', layout: 'vertical', paddingAll: '0px', contents: [
-      { type: 'text', text: label, size: '12px', color: THEME.textMuted },
-      { type: 'text', text: value, size: '20px', weight: 'bold', color: THEME.textStrong }
-    ]
-  };
-}
-
-async function buildDashboardFlex(rangeKey) {
-  const { label, from } = rangeFromKey(rangeKey);
-  const rows = await readAllRows();
-  const { labels, data, total, topName, topAmt } = summarizeExpenses(rows, from);
-  const title = `รายจ่าย (${label})`;
-  const chartUrl = buildQuickChartUrl({ labels, data, title });
-
-  const btn = (label, data) => ({
-    type: 'button', action: { type: 'postback', label, data, displayText: `แดชบอร์ด ${label}` },
-    height: 'sm', style: 'secondary', color: THEME.accentSoft
-  });
-
-  const buttonsGrid = {
-    type: 'box', layout: 'vertical', spacing: 'sm', contents: [
-      { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [ btn('All Time', 'range=all'), btn('Year', 'range=1y'), btn('6M', 'range=6m') ] },
-      { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [ btn('3M', 'range=3m'), btn('1M', 'range=1m'), btn('1W', 'range=1w') ] }
-    ]
-  };
-
-  const bubble = {
     type: 'flex',
-    altText: 'Dashboard รายจ่าย',
+    altText: title,
     contents: {
-      type: 'bubble', size: 'giga', styles: { body: { backgroundColor: '#FFFFFF' }, footer: { backgroundColor: '#FFFFFF' } },
-      hero: { type: 'image', url: chartUrl, size: 'full', aspectRatio: '16:9', aspectMode: 'cover' },
+      type: 'bubble', size: 'mega', styles: { body: { backgroundColor: '#FFFFFF' } },
+      header: {
+        type: 'box', layout: 'horizontal', contents: [
+          { type: 'text', text: icon + ' ' + title, weight: 'bold', size: 'md', color: THEME.textStrong },
+          { type: 'button', action: { type: 'postback', label: '✖', data: 'action=cancel', displayText: 'ยกเลิก' }, style: 'secondary', color: THEME.danger, height: 'sm' }
+        ], justifyContent: 'space-between'
+      },
       body: {
         type: 'box', layout: 'vertical', spacing: 'md', contents: [
-          { type: 'box', layout: 'horizontal', justifyContent: 'space-between', contents: [
-            { type: 'text', text: 'Finance Dashboard', weight: 'bold', size: 'md', color: THEME.textStrong },
-            chip(label)
-          ] },
-          { type: 'separator', margin: 'sm' },
-          { type: 'box', layout: 'horizontal', spacing: 'xl', contents: [
-            stat('รวมรายจ่าย', `${Math.round(total).toLocaleString()} บ.`),
-            stat('หมวดสูงสุด', `${topName} ~ ${Math.round(topAmt).toLocaleString()} บ.`)
-          ] }
+          { type: 'text', text: amountTxt, size: 'xxl', weight: 'bold', color: THEME.textStrong },
+          { type: 'text', text: note || '-', size: 'sm', color: THEME.textMuted },
+          { type: 'text', text: date, size: '12px', color: THEME.textMuted },
+          { type: 'box', layout: 'horizontal', spacing: 'sm', contents: chips }
         ]
       },
-      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [ { type: 'text', text: 'ช่วงเวลา', size: '12px', color: THEME.textMuted }, buttonsGrid ] }
-    },
-    quickReply: { items: [
-      { type: 'action', action: { type: 'postback', label: '1W', data: 'range=1w', displayText: 'แดชบอร์ด 1W' } },
-      { type: 'action', action: { type: 'postback', label: '1M', data: 'range=1m', displayText: 'แดชบอร์ด 1M' } },
-      { type: 'action', action: { type: 'postback', label: '3M', data: 'range=3m', displayText: 'แดชบอร์ด 3M' } }
-    ] }
+      footer: {
+        type: 'box', layout: 'horizontal', spacing: 'md', contents: [
+          { type: 'button', style: 'primary', color: THEME.accent, height: 'sm', action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' } },
+          { type: 'button', style: 'secondary', color: THEME.accentSoft, height: 'sm', action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
+        ]
+      }
+    }
   };
-  return bubble;
+}
+
+function buildSavePayload({ type, amount, category, note }) {
+  const shortNote = String(note || '').slice(0, 40);
+  const params = new URLSearchParams({ action: 'save', type, amount: String(amount), category, note: shortNote });
+  return params.toString();
 }
 
 // -------- Routes --------
-app.get('/webhook', (req, res) => { res.status(200).send('OK'); });
+app.get('/webhook', (req, res) => {
+  res.status(200).send('OK');
+});
 
 app.post('/webhook', middleware(lineConfig), (req, res) => {
   try {
     res.sendStatus(200);
     const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
     const events = Array.isArray(body.events) ? body.events : [];
-    Promise.all(events.map(e => handleEvent(e))).catch(err => { console.error('handleEvent error:', err?.response?.data || err.message || err); });
+    Promise.all(events.map(e => handleEvent(e))).catch(err => {
+      console.error('handleEvent error:', err?.response?.data || err.message || err);
+    });
   } catch (err) {
     console.error('webhook handler crash:', err);
   }
 });
 
-app.get('/', (req, res) => { res.send('Bot พร้อมทำงาน'); });
+app.get('/', (req, res) => {
+  res.send('Bot พร้อมทำงาน');
+});
 
 app.get('/debug/models', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.status(400).json({ error: 'GEMINI_API_KEY not set' });
+
   const url = 'https://generativelanguage.googleapis.com/v1/models';
   let lastErr = null;
   for (let i = 0; i < 3; i++) {
     try {
-      const r = await axios.get(url, { headers: { 'x-goog-api-key': apiKey }, timeout: AI_TIMEOUT_MS });
-      const models = (r.data?.models || []).map(m => ({ name: m.name, displayName: m.displayName, supportedGenerationMethods: m.supportedGenerationMethods }));
+      const r = await axios.get(url, { headers: { 'x-goog-api-key': apiKey }, timeout: Number(process.env.AI_TIMEOUT_MS || 45000) });
+      const models = (r.data?.models || []).map(m => ({
+        name: m.name,
+        displayName: m.displayName,
+        supportedGenerationMethods: m.supportedGenerationMethods
+      }));
       return res.json({ models });
     } catch (e) {
       lastErr = e;
       const status = e?.response?.status;
-      if ([503,502,504].includes(status)) { await new Promise(r => setTimeout(r, Math.pow(2, i) * 500)); continue; }
+      if (status === 503 || status === 502 || status === 504) {
+        await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
+        continue;
+      }
       return res.status(500).json({ error: e?.response?.data?.error?.message || e.message });
     }
   }
@@ -337,52 +322,72 @@ app.get('/debug/models', async (req, res) => {
 
 // -------- LINE Handler --------
 async function handleEvent(event) {
-  // Postback: เปลี่ยนช่วงเวลา Dashboard
-  if (event.type === 'postback' && event.postback?.data && event.replyToken) {
+  // Postback ก่อน
+  if (event.type === 'postback' && event.postback?.data) {
     const data = String(event.postback.data || '');
-    if (data.startsWith('range=')) {
-      const key = data.split('=')[1];
-      const flex = await buildDashboardFlex(key);
-      return lineClient.replyMessage(event.replyToken, flex);
+    const p = new URLSearchParams(data);
+    const action = p.get('action');
+
+    if (action === 'cancel' && event.replyToken) {
+      return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ยกเลิกแล้วครับ' });
     }
-    return;
+
+    if (action === 'save') {
+      const type = p.get('type') || 'รายจ่าย';
+      const amount = Number(p.get('amount') || '0');
+      const category = p.get('category') || 'อื่นๆ';
+      const note = p.get('note') || '-';
+      const date = todayTH();
+      try {
+        await appendRow([date, type, amount, category, note]);
+        if (event.replyToken) {
+          return lineClient.replyMessage(event.replyToken, { type: 'text', text: `บันทึกแล้ว: ${type} ${amount.toLocaleString()} บ. • ${category} • ${date} ✅` });
+        }
+      } catch (err) {
+        if (event.replyToken) {
+          return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'บันทึกไม่ผ่าน เช็กสิทธิ์ชีต/ค่า .env ก่อนครับ' });
+        }
+      }
+      return;
+    }
   }
 
+  // ข้อความธรรมดา
   if (event.type !== 'message' || event.message.type !== 'text') return;
   const text = event.message.text.trim();
-  const today = new Date().toLocaleDateString('th-TH');
+  const today = todayTH();
 
+  // คำสั่งเก่าแบบกำหนดชัดเจน
   const spendRegex = /^(รายจ่าย)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
   const incomeRegex = /^(รายรับ)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
 
-  // Dashboard trigger: แดชบอร์ด / dashboard / pie / พาย
-  if (/^(แดชบอร์ด|dashboard|pie|พาย)(\s+.*)?$/i.test(text)) {
-    const flex = await buildDashboardFlex('1m'); // เริ่มที่ 1 เดือน
-    return lineClient.replyMessage(event.replyToken, flex);
-  }
-
-  // รูปแบบไม่ครบ
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
     return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"' });
   }
 
-  // บันทึก
   if (spendRegex.test(text) || incomeRegex.test(text)) {
     const isSpend = spendRegex.test(text);
-    const [, type, amountRaw, category] = (isSpend ? spendRegex : incomeRegex).exec(text);
+    const [, type, amountRaw, detail] = (isSpend ? spendRegex : incomeRegex).exec(text);
     const amount = Number(String(amountRaw).replace(',', ''));
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ตัวเลขไม่ถูกนะ ลองแบบ "รายจ่าย 120 คาเฟ่"' });
-    }
-    try {
-      await appendRow([today, type, amount, category, '-']);
-      return lineClient.replyMessage(event.replyToken, { type: 'text', text: `บันทึกแล้ว: ${type} ${amount.toLocaleString()} บ. • ${category} • ${today} ✅` });
-    } catch (err) {
-      return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'บันทึกไม่ผ่าน เช็กสิทธิ์ชีต/ค่า .env ก่อนครับ' });
-    }
+    const category = detectCategory(detail, type);
+    const note = detail;
+    const payload = buildSavePayload({ type, amount, category, note });
+    const flex = confirmFlex({ type, amount, category, note, date: today, payload });
+    return lineClient.replyMessage(event.replyToken, flex);
   }
 
-  // วิเคราะห์
+  // โหมดอัตโนมัติ: แค่พิมพ์ "กาแฟ 65" หรือ "เงินเดือน 15000"
+  const amt = extractAmount(text);
+  if (amt && amt > 0) {
+    const type = detectType(text);
+    const category = detectCategory(text, type);
+    const note = stripNote(text).trim();
+    const payload = buildSavePayload({ type, amount: amt, category, note });
+    const flex = confirmFlex({ type, amount: amt, category, note, date: today, payload });
+    return lineClient.replyMessage(event.replyToken, flex);
+  }
+
+  // วิเคราะห์ (เดิม)
   if (text === 'วิเคราะห์') {
     if (event.source?.userId) {
       await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ แป๊บเดียวครับ...' });
@@ -396,10 +401,19 @@ async function handleEvent(event) {
     }
   }
 
-  // Help
-  const help = [ 'พิมพ์ได้แบบนี้:', '• รายจ่าย 120 คาเฟ่', '• รายรับ 15000 เงินเดือน', '• วิเคราะห์ (สรุปให้พร้อมแนวทาง)', '• แดชบอร์ด (ดูพายรายจ่าย)' ].join('\n');
+  // เมนูช่วยเหลือ
+  const help = [
+    'พิมพ์เร็ว ๆ ได้แบบนี้:',
+    '• กาแฟ 65  → (ระบบเดา: รายจ่าย/อาหาร)',
+    '• เงินเดือน 15000  → (ระบบเดา: รายรับ/เงินเดือน)',
+    '• รายจ่าย 120 คาเฟ่  → (กำหนดเอง)',
+    '• รายรับ 15000 เงินเดือน  → (กำหนดเอง)',
+    '• วิเคราะห์  → (สรุปด้วย AI)'
+  ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => { console.log(`Server running on port ${port}`); });
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
