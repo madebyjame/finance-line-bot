@@ -146,7 +146,7 @@ ${lines}
       return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
     }
   }
-  return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
+  return 'Gemini ล่มชั่วคราว รอสักครู่ แล้วค่อย"วิเคราะห์" ใหม่น่ะ';
 }
 
 // -------- Routes --------
@@ -218,7 +218,7 @@ async function handleEvent(event) {
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
     return lineClient.replyMessage(event.replyToken, {
       type: 'text',
-      text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"'
+      text: 'รูปแบบไม่ครบ ลองแบบนี้ "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"'
     });
   }
 
