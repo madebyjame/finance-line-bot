@@ -237,7 +237,7 @@ async function handleEvent(event) {
       await appendRow([today, type, amount, category, '-']);
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: `บันทึกแล้ว: ${type} ${amount.toLocaleString()} บ. • ${category} • ${today} ✅`
+        text: `บันทึกเรียบร้อยครับ : ${type} ${amount.toLocaleString()} บ. • ${category} • ${today} ✅`
       });
     } catch (err) {
       return lineClient.replyMessage(event.replyToken, {
@@ -266,10 +266,7 @@ async function handleEvent(event) {
 
   // เมนูช่วยเหลือ
   const help = [
-    'พิมพ์ได้แบบนี้:',
-    '• รายจ่าย 120 คาเฟ่',
-    '• รายรับ 15000 เงินเดือน',
-    '• วิเคราะห์ (สรุปให้พร้อมแนวทาง)'
+    'เริ่มต้นบันทึก รายรับ รายจ่าย พิมพ์ รายรับ 15000 เงินเดือนครับ'
   ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
