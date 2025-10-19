@@ -19,6 +19,14 @@ const lineConfig = {
 };
 const lineClient = new Client(lineConfig);
 
+// ====== THEME ======
+const THEME = {
+  accent: '#4F46E5',       // indigo-600
+  accentSoft: '#EEF2FF',   // indigo-50
+  textMuted: '#8B95A1',
+  textStrong: '#111827',
+};
+
 // -------- Google Sheets --------
 const auth = new google.auth.GoogleAuth({
   keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
@@ -77,7 +85,6 @@ async function readRecentRows(limit = 120) {
 
 // -------- Utils: Date parsing (th-TH) --------
 function parseThaiDate(d) {
-  // รองรับ 19/10/2568, 19/10/2025, 2025-10-19
   if (!d || typeof d !== 'string') return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return new Date(d);
   const m = d.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
@@ -172,7 +179,7 @@ ${lines}
   return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
 }
 
-// -------- Dashboard (Pie via Flex + QuickChart) --------
+// ====== Dashboard (Pie via Flex + QuickChart) ======
 const RANGE_PRESETS = {
   all: { label: 'All Time', days: null },
   '1y': { label: 'Year', days: 365 },
@@ -204,22 +211,19 @@ function summarizeExpenses(rows, fromDate) {
   if (othersSum > 0) top.push(['อื่นๆ', othersSum]);
   const labels = top.map(([k]) => k);
   const data = top.map(([,v]) => Math.round(v));
-  return { labels, data, total };
+  const topName = labels[0] || '-';
+  const topAmt = data[0] || 0;
+  return { labels, data, total, topName, topAmt };
 }
 
 function buildQuickChartUrl({ labels, data, title }) {
   const cfg = {
     type: 'pie',
     data: { labels, datasets: [{ data }] },
-    options: {
-      plugins: {
-        legend: { position: 'bottom' },
-        title: { display: true, text: title }
-      }
-    }
+    options: { plugins: { legend: { position: 'bottom' }, title: { display: true, text: title } } }
   };
   const encoded = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${encoded}&backgroundColor=white&width=900&height=600&format=png`;
+  return `https://quickchart.io/chart?c=${encoded}&backgroundColor=white&width=1000&height=640&format=png`;
 }
 
 function rangeFromKey(key) {
@@ -230,59 +234,67 @@ function rangeFromKey(key) {
   return { key: k, label: preset.label, from };
 }
 
-async function buildDashboardFlex(rangeKey) {
-  const { key, label, from } = rangeFromKey(rangeKey);
-  const rows = await readAllRows();
-  const { labels, data, total } = summarizeExpenses(rows, from);
+function chip(text, colorBg = THEME.accentSoft, colorText = THEME.accent) {
+  return {
+    type: 'box', layout: 'baseline', backgroundColor: colorBg, cornerRadius: '12px', paddingAll: '6px',
+    contents: [{ type: 'text', text, size: '12px', weight: 'bold', color: colorText }]
+  };
+}
 
+function stat(label, value) {
+  return {
+    type: 'box', layout: 'vertical', paddingAll: '0px', contents: [
+      { type: 'text', text: label, size: '12px', color: THEME.textMuted },
+      { type: 'text', text: value, size: '20px', weight: 'bold', color: THEME.textStrong }
+    ]
+  };
+}
+
+async function buildDashboardFlex(rangeKey) {
+  const { label, from } = rangeFromKey(rangeKey);
+  const rows = await readAllRows();
+  const { labels, data, total, topName, topAmt } = summarizeExpenses(rows, from);
   const title = `รายจ่าย (${label})`;
   const chartUrl = buildQuickChartUrl({ labels, data, title });
 
-  const buttons = [
-    { label: 'All Time', data: 'range=all' },
-    { label: 'Year',     data: 'range=1y' },
-    { label: '6M',       data: 'range=6m' },
-    { label: '3M',       data: 'range=3m' },
-    { label: '1M',       data: 'range=1m' },
-    { label: '1W',       data: 'range=1w' },
-  ];
+  const btn = (label, data) => ({
+    type: 'button', action: { type: 'postback', label, data, displayText: `แดชบอร์ด ${label}` },
+    height: 'sm', style: 'secondary', color: THEME.accentSoft
+  });
 
-  const footerContents = buttons.map(b => ({
-    type: 'button',
-    height: 'sm',
-    action: { type: 'postback', label: b.label, data: b.data, displayText: `แดชบอร์ด ${b.label}` },
-    style: 'secondary',
-    margin: 'sm'
-  }));
+  const buttonsGrid = {
+    type: 'box', layout: 'vertical', spacing: 'sm', contents: [
+      { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [ btn('All Time', 'range=all'), btn('Year', 'range=1y'), btn('6M', 'range=6m') ] },
+      { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [ btn('3M', 'range=3m'), btn('1M', 'range=1m'), btn('1W', 'range=1w') ] }
+    ]
+  };
 
   const bubble = {
     type: 'flex',
     altText: 'Dashboard รายจ่าย',
     contents: {
-      type: 'bubble',
-      hero: {
-        type: 'image',
-        url: chartUrl,
-        size: 'full',
-        aspectRatio: '16:9',
-        aspectMode: 'cover'
-      },
+      type: 'bubble', size: 'giga', styles: { body: { backgroundColor: '#FFFFFF' }, footer: { backgroundColor: '#FFFFFF' } },
+      hero: { type: 'image', url: chartUrl, size: 'full', aspectRatio: '16:9', aspectMode: 'cover' },
       body: {
-        type: 'box',
-        layout: 'vertical',
-        contents: [
-          { type: 'text', text: 'Dashboard รายจ่าย', weight: 'bold', size: 'md' },
-          { type: 'text', text: label, size: 'sm', color: '#888888', margin: 'sm' },
-          { type: 'text', text: `รวม ~ ${Math.round(total).toLocaleString()} บาท`, size: 'sm', margin: 'md' }
+        type: 'box', layout: 'vertical', spacing: 'md', contents: [
+          { type: 'box', layout: 'horizontal', justifyContent: 'space-between', contents: [
+            { type: 'text', text: 'Finance Dashboard', weight: 'bold', size: 'md', color: THEME.textStrong },
+            chip(label)
+          ] },
+          { type: 'separator', margin: 'sm' },
+          { type: 'box', layout: 'horizontal', spacing: 'xl', contents: [
+            stat('รวมรายจ่าย', `${Math.round(total).toLocaleString()} บ.`),
+            stat('หมวดสูงสุด', `${topName} ~ ${Math.round(topAmt).toLocaleString()} บ.`)
+          ] }
         ]
       },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'sm',
-        contents: footerContents
-      }
-    }
+      footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [ { type: 'text', text: 'ช่วงเวลา', size: '12px', color: THEME.textMuted }, buttonsGrid ] }
+    },
+    quickReply: { items: [
+      { type: 'action', action: { type: 'postback', label: '1W', data: 'range=1w', displayText: 'แดชบอร์ด 1W' } },
+      { type: 'action', action: { type: 'postback', label: '1M', data: 'range=1m', displayText: 'แดชบอร์ด 1M' } },
+      { type: 'action', action: { type: 'postback', label: '3M', data: 'range=3m', displayText: 'แดชบอร์ด 3M' } }
+    ] }
   };
   return bubble;
 }
@@ -295,9 +307,7 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
     res.sendStatus(200);
     const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
     const events = Array.isArray(body.events) ? body.events : [];
-    Promise.all(events.map(e => handleEvent(e))).catch(err => {
-      console.error('handleEvent error:', err?.response?.data || err.message || err);
-    });
+    Promise.all(events.map(e => handleEvent(e))).catch(err => { console.error('handleEvent error:', err?.response?.data || err.message || err); });
   } catch (err) {
     console.error('webhook handler crash:', err);
   }
@@ -313,19 +323,12 @@ app.get('/debug/models', async (req, res) => {
   for (let i = 0; i < 3; i++) {
     try {
       const r = await axios.get(url, { headers: { 'x-goog-api-key': apiKey }, timeout: AI_TIMEOUT_MS });
-      const models = (r.data?.models || []).map(m => ({
-        name: m.name,
-        displayName: m.displayName,
-        supportedGenerationMethods: m.supportedGenerationMethods
-      }));
+      const models = (r.data?.models || []).map(m => ({ name: m.name, displayName: m.displayName, supportedGenerationMethods: m.supportedGenerationMethods }));
       return res.json({ models });
     } catch (e) {
       lastErr = e;
       const status = e?.response?.status;
-      if ([503,502,504].includes(status)) {
-        await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
-        continue;
-      }
+      if ([503,502,504].includes(status)) { await new Promise(r => setTimeout(r, Math.pow(2, i) * 500)); continue; }
       return res.status(500).json({ error: e?.response?.data?.error?.message || e.message });
     }
   }
@@ -353,17 +356,14 @@ async function handleEvent(event) {
   const incomeRegex = /^(รายรับ)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
 
   // Dashboard trigger: แดชบอร์ด / dashboard / pie / พาย
-  if (/^(แดชบอร์ด|dashboard|pie|พาย|สรุป)(\s+.*)?$/i.test(text)) {
-    const flex = await buildDashboardFlex('1m'); // ค่าเริ่มต้น 1 เดือน
+  if (/^(แดชบอร์ด|dashboard|pie|พาย)(\s+.*)?$/i.test(text)) {
+    const flex = await buildDashboardFlex('1m'); // เริ่มที่ 1 เดือน
     return lineClient.replyMessage(event.replyToken, flex);
   }
 
   // รูปแบบไม่ครบ
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
-    return lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"'
-    });
+    return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"' });
   }
 
   // บันทึก
@@ -397,13 +397,7 @@ async function handleEvent(event) {
   }
 
   // Help
-  const help = [
-    'พิมพ์ได้แบบนี้:',
-    '• รายจ่าย 120 คาเฟ่',
-    '• รายรับ 15000 เงินเดือน',
-    '• วิเคราะห์ (สรุปให้พร้อมแนวทาง)',
-    '• แดชบอร์ด (ดูพายรายจ่าย)'
-  ].join('\n');
+  const help = [ 'พิมพ์ได้แบบนี้:', '• รายจ่าย 120 คาเฟ่', '• รายรับ 15000 เงินเดือน', '• วิเคราะห์ (สรุปให้พร้อมแนวทาง)', '• แดชบอร์ด (ดูพายรายจ่าย)' ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
 
