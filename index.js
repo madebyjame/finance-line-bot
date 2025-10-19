@@ -5,7 +5,6 @@ if (process.env.GOOGLE_CREDENTIALS_JSON) {
   process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
 }
 
-
 require('dotenv').config();
 const express = require('express');
 const { Client, middleware } = require('@line/bot-sdk');
@@ -114,7 +113,7 @@ async function callGeminiModel({ model, apiKey, prompt }) {
 async function analyzeWithGemini() {
   const rows = await readRecentRows(120);
   if (rows.length === 0) {
-    return 'ยังไม่มีข้อมูลให้วิเคราะห์ครับ ลองพิมพ์ "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน" ก่อนนะ';
+    return 'ยังไม่มีข้อมูล ลองพิมพ์ "รายจ่าย 120 คาเฟ่" ก่อนนะ';
   }
 
   const lines = rows.map(r => {
@@ -134,7 +133,7 @@ ${lines}
 `.trim();
 
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env ครับ';
+  if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
 
   for (const model of MODEL_LIST) {
     try {
@@ -144,10 +143,10 @@ ${lines}
       const status = e?.response?.status;
       if (status === 404) continue;
       if (status === 503 || status === 502 || status === 504 || status === 500 || status === 429) continue;
-      return `มีปัญหาเรียกใช้งาน AI (${model}): ${e?.response?.data?.error?.message || e.message}`;
+      return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
     }
   }
-  return 'บริการ Gemini ช้าหรือไม่พร้อมใช้งานชั่วคราวครับ ลองพิมพ์ "วิเคราะห์" ใหม่อีกครั้ง หรือเปลี่ยน GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001 ใน .env';
+  return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
 }
 
 // -------- Routes --------
@@ -155,13 +154,13 @@ app.get('/webhook', (req, res) => {
   res.status(200).send('OK');
 });
 
-// ปลอดภัย + ไม่ timeout: ตรวจลายเซ็นด้วย middleware และตอบ 200 ทันที
+// ปลอดภัย + ไม่ timeout: ตรวจลายเซ็นด้วย middleware และตอบ 200 ไว
 app.post('/webhook', middleware(lineConfig), (req, res) => {
   try {
-    // ตอบกลับ LINE ให้ไวก่อน
+    // ตอบ LINE ให้ก่อน
     res.sendStatus(200);
 
-    // ประมวลผลต่อหลังบ้าน แบบไม่บล็อกการตอบ
+    // ประมวลผลหลังบ้าน
     const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
     const events = Array.isArray(body.events) ? body.events : [];
 
@@ -174,9 +173,8 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
   }
 });
 
-
 app.get('/', (req, res) => {
-  res.send('Line Finance Bot is running');
+  res.send('Bot พร้อมทำงาน');
 });
 
 app.get('/debug/models', async (req, res) => {
@@ -216,13 +214,15 @@ async function handleEvent(event) {
   const spendRegex = /^(รายจ่าย)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
   const incomeRegex = /^(รายรับ)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
 
+  // พิมพ์ขึ้นต้นถูก แต่รูปแบบไม่ครบ
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
     return lineClient.replyMessage(event.replyToken, {
       type: 'text',
-      text: 'จำนวนเงินไม่ถูกต้องครับ ลองพิมพ์ใหม่ เช่น "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"'
+      text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"'
     });
   }
 
+  // จัดการคำสั่งบันทึก
   if (spendRegex.test(text) || incomeRegex.test(text)) {
     const isSpend = spendRegex.test(text);
     const [, type, amountRaw, category] = (isSpend ? spendRegex : incomeRegex).exec(text);
@@ -230,31 +230,32 @@ async function handleEvent(event) {
     if (!Number.isFinite(amount) || amount <= 0) {
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: 'จำนวนเงินไม่ถูกต้องครับ ลองพิมพ์ใหม่ เช่น "รายจ่าย 120 คาเฟ่"'
+        text: 'ตัวเลขไม่ถูกนะ ลองแบบ "รายจ่าย 120 คาเฟ่"'
       });
     }
     try {
       await appendRow([today, type, amount, category, '-']);
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: `บันทึก${type} ${amount.toLocaleString()} บาท • หมวด: ${category} • วันที่: ${today} ✅`
+        text: `บันทึกแล้ว: ${type} ${amount.toLocaleString()} บ. • ${category} • ${today} ✅`
       });
     } catch (err) {
       return lineClient.replyMessage(event.replyToken, {
         type: 'text',
-        text: 'บันทึกไม่สำเร็จครับ ตรวจสอบสิทธิ์ของ Service Account (ต้องแชร์ Editor ให้ชีต) และค่าใน .env'
+        text: 'บันทึกไม่ผ่าน เช็กสิทธิ์ชีต/ค่า .env ก่อนครับ'
       });
     }
   }
 
+  // คำสั่งวิเคราะห์
   if (text === 'วิเคราะห์') {
     if (event.source?.userId) {
-      await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ให้ครับ อดใจแป๊บ...' });
+      await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ แป๊บเดียวครับ...' });
       analyzeWithGemini()
         .then(msg => lineClient.pushMessage(event.source.userId, { type: 'text', text: msg }))
         .catch(err => lineClient.pushMessage(event.source.userId, {
           type: 'text',
-          text: `มีปัญหาเรียกใช้งาน AI: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
+          text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
         }));
       return;
     } else {
@@ -263,11 +264,12 @@ async function handleEvent(event) {
     }
   }
 
+  // เมนูช่วยเหลือ
   const help = [
-    'สั่งได้แบบนี้:',
+    'พิมพ์ได้แบบนี้:',
     '• รายจ่าย 120 คาเฟ่',
     '• รายรับ 15000 เงินเดือน',
-    '• วิเคราะห์ (สรุปและคำแนะนำปรับค่าใช้จ่าย/DCA)'
+    '• วิเคราะห์ (สรุปให้พร้อมแนวทาง)'
   ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
