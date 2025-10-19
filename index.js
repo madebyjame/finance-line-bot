@@ -1,3 +1,12 @@
+// สร้างไฟล์ service account ชั่วคราวจาก ENV (ใช้ได้กับ Railway)
+const fs = require("fs");
+
+if (process.env.GOOGLE_CREDENTIALS_JSON) {
+  const path = "/tmp/google.json";
+  fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
+  process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
+}
+
 require('dotenv').config();
 const express = require('express');
 const { Client, middleware } = require('@line/bot-sdk');
