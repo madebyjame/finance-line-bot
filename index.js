@@ -169,6 +169,125 @@ function stripNote(text) {
   return text.replace(/\s*(รายรับ|รายจ่าย)\b/gi, '').trim();
 }
 
+// ============================ DASHBOARD HELPERS ============================
+// แปลงวันที่รูปแบบไทย (เช่น 26/10/2568) เป็น Date JS (แปลง พ.ศ. → ค.ศ.)
+function parseThaiDate(s) {
+  if (!s) return null;
+  const parts = String(s).split('/');
+  if (parts.length !== 3) return new Date(s);
+  let [d, m, y] = parts.map(x => parseInt(x, 10));
+  if (y > 2400) y -= 543; // พ.ศ. → ค.ศ.
+  return new Date(y, m - 1, d);
+}
+
+// ตรวจว่า date อยู่ในช่วง [start, end] หรือไม่ (ไม่สนเวลา)
+function isWithin(d, start, end) {
+  if (!d) return false;
+  const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const ss = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const ee = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  return dd >= ss && dd <= ee;
+}
+
+// แปลงโค้ดช่วงเวลา (1y, 6m, 3m, 1m, 1w) → วันที่เริ่ม/สิ้นสุด
+function getRangeDates(rangeCode) {
+  const end = new Date(); // วันนี้
+  const start = new Date(end);
+  switch (rangeCode) {
+    case '1y': start.setFullYear(end.getFullYear() - 1); break;
+    case '6m': start.setMonth(end.getMonth() - 6); break;
+    case '3m': start.setMonth(end.getMonth() - 3); break;
+    case '1m': start.setMonth(end.getMonth() - 1); break;
+    case '1w': start.setDate(end.getDate() - 7); break;
+    default:   start.setMonth(end.getMonth() - 1); // ดีฟอลต์ 1 เดือน
+  }
+  return { start, end };
+}
+
+// สร้าง URL กราฟด้วย QuickChart (ไม่ต้องโฮสต์รูปเอง)
+function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
+  const base = 'https://quickchart.io/chart';
+  return `${base}?c=${encodeURIComponent(JSON.stringify(config))}&w=${w}&h=${h}`;
+}
+
+// อ่านข้อมูลล่าสุด (ยังไม่แยก user) — ใช้ข้อมูลรวมไปก่อน
+async function readRecentRowsForUser(userId, limit = 1000) {
+  return readRecentRows(limit);
+}
+
+// คำนวณสรุป และสร้างลิงก์กราฟ (แท่ง: รับ/จ่าย รวม, พาย: รายจ่ายตามหมวด)
+async function buildDashboardImages(userId, rangeCode = '1m') {
+  const rows = await readRecentRowsForUser(userId, 1000);
+  if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
+
+  const { start, end } = getRangeDates(rangeCode);
+
+  // กรองตามช่วงเวลา
+  const inRange = rows.filter(r => {
+    const d = parseThaiDate(r[0]); // คอลัมน์ A = วันที่ (th-TH)
+    return isWithin(d, start, end);
+  });
+
+  if (inRange.length === 0) {
+    return { note: 'ช่วงเวลานี้ยังไม่มีรายการครับ' };
+  }
+
+  // รวมยอด และแตกหมวดหมู่รายจ่าย
+  let sumIncome = 0;
+  let sumExpense = 0;
+  const catExpense = {};
+  for (const r of inRange) {
+    const type = r[1];
+    const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
+    const cat = r[3] || 'อื่นๆ';
+    if (type === 'รายรับ') sumIncome += amt;
+    else if (type === 'รายจ่าย') {
+      sumExpense += amt;
+      catExpense[cat] = (catExpense[cat] || 0) + amt;
+    }
+  }
+  const balance = sumIncome - sumExpense;
+
+  // กราฟแท่ง: รายรับ/รายจ่ายรวม
+  const barConfig = {
+    type: 'bar',
+    data: {
+      labels: ['รวม'],
+      datasets: [
+        { label: 'รายรับ', data: [sumIncome] },
+        { label: 'รายจ่าย', data: [sumExpense] }
+      ]
+    },
+    options: { plugins: { legend: { position: 'bottom' } } }
+  };
+
+  // กราฟพาย: รายจ่ายตามหมวด
+  const pieLabels = Object.keys(catExpense);
+  const pieData = Object.values(catExpense);
+  const pieConfig = {
+    type: 'pie',
+    data: {
+      labels: pieLabels.length ? pieLabels : ['ไม่มีรายจ่าย'],
+      datasets: [{ data: pieData.length ? pieData : [1] }]
+    },
+    options: { plugins: { legend: { position: 'bottom' } } }
+  };
+
+  const barUrl = buildQuickChartUrl(barConfig);
+  const pieUrl = buildQuickChartUrl(pieConfig, { w: 600, h: 600 });
+
+  const pretty = (n) => Number(n).toLocaleString();
+  const note = [
+    `ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
+    `รายรับรวม: ${pretty(sumIncome)} บาท`,
+    `รายจ่ายรวม: ${pretty(sumExpense)} บาท`,
+    `คงเหลือ: ${pretty(balance)} บาท`
+  ].join('\n');
+
+  return { note, barUrl, pieUrl };
+}
+// ============================ END DASHBOARD HELPERS ============================
+
 // -------- Gemini --------
 const ENV_MODEL = (process.env.GEMINI_MODEL || '').trim();
 const DEFAULT_MODELS = [
@@ -299,6 +418,63 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
 // 🔄 สร้าง payload สำหรับส่งข้อมูลกลับมาเมื่อกดปุ่มบันทึก
 // แปลงข้อมูลเป็น URL encoded string เพื่อส่งผ่าน LINE postback
 // จำกัดความยาว note ไม่เกิน 40 ตัวอักษร
+// ============================ FLEX DASHBOARD MENU ============================
+// เมนูแดชบอร์ดสไตล์มินิมอล: 1 year / 6 เดือน / 3 เดือน / 1 เดือน / 1 week + Export Excel
+function buildDashboardMenuFlex() {
+  const GREEN = '#16A34A'; // ปุ่ม Export สีเขียวเด่น
+  const TEXT = '#111111';
+  const MUTED = '#8B95A1';
+
+  return {
+    type: 'flex',
+    altText: 'แดชบอร์ดการเงิน',
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '16px',
+        contents: [
+          { type: 'text', text: 'แดชบอร์ดการเงิน', weight: 'bold', size: 'lg', color: TEXT },
+          { type: 'text', text: 'เลือกช่วงเวลาที่ต้องการดูสรุป', size: 'xs', color: MUTED, margin: 'sm' }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: '12px',
+        paddingAll: '16px',
+        contents: [
+          { type: 'box', layout: 'horizontal', spacing: '8px', contents: [
+            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
+            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } }
+          ]},
+          { type: 'box', layout: 'horizontal', spacing: '8px', contents: [
+            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
+            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } }
+          ]},
+          { type: 'box', layout: 'horizontal', contents: [
+            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } }
+          ]}
+        ]
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '16px',
+        contents: [
+          { type: 'button', style: 'primary', height: 'sm', color: GREEN,
+            action: { type: 'postback', label: 'Export เป็น Excel', data: 'action=dash&do=export_excel' } }
+        ]
+      },
+      styles: { header: { backgroundColor: '#FFFFFF' }, body: { backgroundColor: '#FFFFFF' }, footer: { backgroundColor: '#FFFFFF' } }
+    }
+  };
+}
+// ============================ END FLEX DASHBOARD MENU ============================
+
+
 function buildSavePayload({ type, amount, category, note }) {
   // ทำจำนวนเงินให้เป็น “เลขล้วน” เสมอ (กันคอมม่า)  <-- FIX
   const amt = Number(String(amount).replace(/,/g, ''));
@@ -389,6 +565,34 @@ async function handleEvent(event) {
       return;
     }
   }
+      // ===== Dash range & export =====
+    if (action === 'dash') {
+      const range = p.get('range');         // '1y' | '6m' | '3m' | '1m' | '1w'
+      const doing = p.get('do');            // 'export_excel' (ถ้ามี)
+
+      // ปุ่ม Export Excel (เวอร์ชัน placeholder — เดี๋ยวค่อยเชื่อม exceljs/endpoint)
+      if (doing === 'export_excel') {
+        return lineClient.replyMessage(event.replyToken, {
+          type: 'text',
+          text: 'กำลังสร้างไฟล์ Excel ให้ครับ... (จะส่งลิงก์ดาวน์โหลดให้เร็ว ๆ นี้)'
+        });
+      }
+
+      // ผู้ใช้เลือกช่วงเวลา → สร้างสรุปและกราฟ
+      const userId = event.source?.userId || 'anonymous';
+      const dash = await buildDashboardImages(userId, range || '1m');
+
+      // ตอบสรุป + กราฟ (ส่งเป็นรูปภาพจาก quickchart)
+      const msgs = [];
+      if (dash.note) msgs.push({ type: 'text', text: dash.note });
+      if (dash.barUrl) msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
+      if (dash.pieUrl) msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
+
+      if (msgs.length === 0) {
+        msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
+      }
+      return lineClient.replyMessage(event.replyToken, msgs);
+    }
 
   // ข้อความธรรมดา
   if (event.type !== 'message' || event.message.type !== 'text') return;
@@ -402,6 +606,12 @@ async function handleEvent(event) {
 
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
     return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"' });
+  }
+  
+  // ถ้าผู้ใช้พิมพ์ "แดชบอร์ด" ให้แสดงเมนูเลือกช่วงเวลา
+  if (/^แดชบอร์ด$/i.test(text)) {
+  const flex = buildDashboardMenuFlex();
+  return lineClient.replyMessage(event.replyToken, flex);
   }
 
   if (spendRegex.test(text) || incomeRegex.test(text)) {
