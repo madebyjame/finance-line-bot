@@ -112,6 +112,115 @@ async function readRecentRowsForUser(userId, limit = 1000) {
 }
 // ============================ END PER-USER SHEET HELPERS ============================
 
+// แปลงวันที่ไทย → YYYY-MM (คีย์รายเดือน)
+function monthKeyFromThaiDate(s) {
+  const d = parseThaiDate(s);
+  if (!d) return 'unknown';
+  const y = d.getFullYear();
+  const m = (d.getMonth()+1).toString().padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+// สร้างข้อเท็จจริง (facts) สำหรับช่วง N เดือนล่าสุด
+async function buildFinanceFactsForUser(userId, months = 3) {
+  const rows = await readRecentRowsForUser(userId, 1000); // ใช้ข้อมูลพอประมาณ
+  if (!rows || rows.length === 0) return { rows: [], facts: null, text: 'NO_DATA' };
+
+  // เลือกเฉพาะ N เดือนล่าสุด
+  const now = new Date();
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+  const filtered = rows.filter(r => {
+    const d = parseThaiDate(r[0]);
+    return d && d >= cutoff;
+  });
+
+  // สรุปตัวเลข
+  let income = 0, expense = 0;
+  const byCategory = {};      // {cat: sumExpense}
+  const byMonth = {};         // {YYYY-MM: {income, expense}}
+  const singles = [];         // รายการเดี่ยว (สำหรับ outlier)
+
+  for (const r of filtered) {
+    const [date, type, amountRaw, categoryRaw] = r;
+    const amt = Number(String(amountRaw || '0').toString().replace(/,/g, '')) || 0;
+    const cat = categoryRaw || 'อื่นๆ';
+    const mk = monthKeyFromThaiDate(date);
+    if (!byMonth[mk]) byMonth[mk] = { income: 0, expense: 0 };
+
+    if (type === 'รายรับ') {
+      income += amt;
+      byMonth[mk].income += amt;
+    } else if (type === 'รายจ่าย') {
+      expense += amt;
+      byMonth[mk].expense += amt;
+      byCategory[cat] = (byCategory[cat] || 0) + amt;
+      singles.push({ date, category: cat, amount: amt });
+    }
+  }
+
+  // จัดอันดับหมวดรายจ่ายตามสัดส่วน
+  const categoryShares = Object.entries(byCategory)
+    .map(([cat, sum]) => ({
+      category: cat,
+      sum,
+      share: expense > 0 ? sum / expense : 0
+    }))
+    .sort((a,b) => b.sum - a.sum);
+
+  // ค่ากลางของรายจ่ายเดี่ยว (สำหรับดู outlier)
+  const amounts = singles.map(s => s.amount).sort((a,b) => a-b);
+  const median = amounts.length ? (amounts[Math.floor(amounts.length/2)] + amounts[Math.ceil(amounts.length/2)-1]) / 2 : 0;
+  const mean = amounts.length ? (amounts.reduce((a,b)=>a+b,0)/amounts.length) : 0;
+
+  // ระบุ “หมวดที่น่าพิจารณา” ด้วยกติกา
+  const interestingCats = categoryShares.filter(x =>
+    x.share >= FINANCE_RULES.CATEGORY_SHARE_ALERT ||
+    x.sum >= FINANCE_RULES.MIN_MONTHLY_CATEGORY_SUM
+  );
+
+  // คัดรายการเดี่ยวที่ “ใหญ่ผิดปกติ” (ข้ามยอดเล็ก)
+  const outliers = singles.filter(s =>
+    s.amount >= FINANCE_RULES.MIN_SINGLE_IGNORE &&
+    (median > 0 ? s.amount >= FINANCE_RULES.OUTLIER_MULTIPLIER * median : s.amount >= FINANCE_RULES.MIN_MONTHLY_CATEGORY_SUM)
+  ).sort((a,b) => b.amount - a.amount).slice(0, 10);
+
+  // month-over-month (ล่าสุดเทียบก่อนหน้า)
+  const keys = Object.keys(byMonth).sort();
+  const lastKey = keys[keys.length - 1];
+  const prevKey = keys[keys.length - 2];
+  const mom = (lastKey && prevKey) ? {
+    last: { key: lastKey, ...byMonth[lastKey] },
+    prev: { key: prevKey, ...byMonth[prevKey] },
+    diff: {
+      income: (byMonth[lastKey].income - byMonth[prevKey].income),
+      expense: (byMonth[lastKey].expense - byMonth[prevKey].expense),
+    }
+  } : null;
+
+  const facts = {
+    monthsAnalyzed: months,
+    totalIncome: income,
+    totalExpense: expense,
+    balance: income - expense,
+    medianSingleExpense: median,
+    meanSingleExpense: mean,
+    categoryShares,        // เรียงจากมากไปน้อย
+    interestingCats,       // หมวดที่เข้าหลักเกณฑ์
+    outliers,              // รายการเดี่ยวที่ผิดปกติ
+    monthOverMonth: mom,   // เทียบเดือนล่าสุดกับก่อนหน้า
+    rules: FINANCE_RULES,
+  };
+
+  // พร้อมข้อความแถวๆ สำหรับ AI (แบบกะทัดรัด)
+  const text = rows.map(r => {
+    const [date, type, amount, category] = r;
+    return `${date} | ${type} | ${amount} | ${category || '-'}`;
+  }).join('\n');
+
+  return { rows: filtered, facts, text };
+}
+
+
 // -------- Helpers: Date / Format --------
 function todayTH() {
   return new Date().toLocaleDateString('th-TH');
@@ -341,28 +450,57 @@ ${lines}
 }
 
 // วิเคราะห์เฉพาะของผู้ใช้ (เวอร์ชัน per-user)
+// วิเคราะห์เฉพาะของผู้ใช้ (แฟกต์เบส + กติกา)
 async function analyzeWithGeminiForUser(userId) {
-  const rows = await readRecentRowsForUser(userId, 300);
-  if (!rows || rows.length === 0) return 'ยังไม่มีข้อมูลของคุณเลยครับ ลองบันทึกก่อนนะ';
-
-  const lines = rows.map(r => {
-    const [date, type, amount, category] = r;
-    return `${date} | ${type} | ${amount} | ${category || '-'}`;
-  }).join('\n');
-
-  const prompt = `
-ข้อมูลรายรับ-รายจ่าย (เฉพาะผู้ใช้นี้):
-${lines}
-
-โจทย์:
-1) สรุปเดือนล่าสุด: ใช้จ่ายหมวดไหนเยอะสุดและประมาณเท่าไหร่
-2) แนะนำแบบทำได้จริง 3 ข้อ
-3) ถ้าต้องการ DCA เดือนละ 3,000 บาท ควรตัดจากหมวดใดจึงกระทบน้อยที่สุด
-ย่อ กระชับ เป็น bullet และใส่ตัวเลขประมาณการ
-`.trim();
-
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
+
+  // รวบรวม facts 3 เดือนล่าสุด (ปรับได้)
+  const { facts, text } = await buildFinanceFactsForUser(userId, 3);
+  if (!facts) return 'ยังไม่มีข้อมูลของคุณเลยครับ ลองบันทึกก่อนนะ';
+
+  // บล็อกป้องกัน “แนะนำลดยอดเล็กๆ”
+  const rules = facts.rules;
+  const safeCats = rules.ESSENTIAL_CATEGORIES;
+
+  const prompt = `
+คุณเป็นผู้จัดการการเงินส่วนบุคคล (Personal Finance Manager) หน้าที่คุณคือสรุปจาก "ข้อเท็จจริง" ที่ให้เท่านั้น
+ห้ามเดา/ห้ามกุข้อมูลใหม่ และห้ามแนะนำให้ลดรายจ่ายเล็กน้อยที่ต่ำกว่า ${rules.MIN_SINGLE_IGNORE} บาท เว้นแต่รวมหมวดนั้น > ${rules.MIN_MONTHLY_CATEGORY_SUM} บาท/เดือน
+ให้ความสำคัญกับหมวดที่กินสัดส่วนรายจ่าย > ${(rules.CATEGORY_SHARE_ALERT*100).toFixed(0)}% หรือโผล่สูงกว่า median/เฉลี่ยมาก
+
+= ข้อเท็จจริง=
+- รวมรายรับล่าสุด (ช่วง ${facts.monthsAnalyzed} เดือน): ${facts.totalIncome.toLocaleString()} บาท
+- รวมรายจ่ายล่าสุด: ${facts.totalExpense.toLocaleString()} บาท
+- คงเหลือ: ${(facts.balance).toLocaleString()} บาท
+- ค่ากลางรายจ่ายเดี่ยว (median): ${Math.round(facts.medianSingleExpense).toLocaleString()} บาท
+- ค่ากลางเฉลี่ย (mean): ${Math.round(facts.meanSingleExpense).toLocaleString()} บาท
+- หมวดที่น่าพิจารณา (ตามเกณฑ์): ${facts.interestingCats.map(c => `${c.category} ${Math.round(c.sum).toLocaleString()}บ (${Math.round(c.share*100)}%)`).join(', ') || '—'}
+- รายการเดี่ยวที่ดูสูงผิดปกติ (top): ${facts.outliers.map(o => `${o.date}:${o.category} ${Math.round(o.amount).toLocaleString()}บ`).join(', ') || '—'}
+- เทียบเดือนล่าสุดกับก่อนหน้า: ${
+    facts.monthOverMonth
+      ? `รายรับ ${facts.monthOverMonth.last.key} ${facts.monthOverMonth.last.income.toLocaleString()}บ (Δ ${facts.monthOverMonth.diff.income>=0?'+':''}${facts.monthOverMonth.diff.income.toLocaleString()}บ), ` +
+        `รายจ่าย ${facts.monthOverMonth.last.key} ${facts.monthOverMonth.last.expense.toLocaleString()}บ (Δ ${facts.monthOverMonth.diff.expense>=0?'+':''}${facts.monthOverMonth.diff.expense.toLocaleString()}บ)`
+      : 'ข้อมูลไม่พอ'
+  }
+
+= ตารางดิบ (เพื่ออ้างอิงเท่านั้น ไม่ต้องคัดลอกทั้งหมดในการตอบ)=
+วันที่ | ประเภท | จำนวน | หมวด
+${text}
+
+= กติกาการให้คำแนะนำ =
+1) ข้ามรายการเดี่ยวที่ต่ำกว่า ${rules.MIN_SINGLE_IGNORE} บาท เว้นแต่หมวดนั้นรวมเดือนเกิน ${rules.MIN_MONTHLY_CATEGORY_SUM} บาท
+2) พุ่งเป้าที่หมวดที่ share > ${(rules.CATEGORY_SHARE_ALERT*100).toFixed(0)}% หรือรวมต่อเดือนสูง
+3) สำหรับหมวดจำเป็น (${safeCats.join(', ')}) ให้เสนอ "บริหาร/ต่อรอง/จัดตาราง" แทนการตัดจนเกินจริง
+4) อย่าเสนอให้ลดสิ่งที่ไม่ส่งผลต่อภาพรวม
+5) ถ้า “ไม่มีอะไรน่าลด” ให้พูดตามจริงว่า "ปกติดี"
+6) ตอบเป็นภาษาไทย ลำดับหัวข้อชัดเจน อ่านง่าย (bullet) และใส่ตัวเลขประมาณให้เสมอ
+
+= งานที่ต้องตอบ =
+- สรุปภาพรวม 1–2 บรรทัด
+- หมวดที่ควรให้ความสนใจ (เหตุผลสั้น + ตัวเลข)
+- ข้อเสนอ 3 ข้อที่ทำได้จริง (เช่น เป้า/ความถี่/ขั้นตอน)
+- สรุปสถานะ: ปกติ / ควรเฝ้าดู / ควรปรับ
+`.trim();
 
   for (const model of MODEL_LIST) {
     try {
@@ -377,6 +515,7 @@ ${lines}
   return 'Gemini ช้า/ล่มชั่วคราว ลองใหม่อีกครั้งครับ';
 }
 
+
 // 🎨 Flex UI
 function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   return {
@@ -384,6 +523,16 @@ function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
     contents: [{ type: 'text', text, size: '12px', weight: 'bold', color }]
   };
 }
+
+// ===== FINANCE RULES (เกณฑ์เพื่อกันแนะนำมั่ว) =====
+const FINANCE_RULES = {
+  MIN_SINGLE_IGNORE: 100,            // ข้ามรายการเดี่ยวที่ต่ำกว่า X บาท (เว้นแต่มียอดรวมหมวดนี้สูง)
+  MIN_MONTHLY_CATEGORY_SUM: 1000,    // หมวดไหนรวมต่อเดือนต่ำกว่า X ให้ถือว่า "ปกติ"
+  CATEGORY_SHARE_ALERT: 0.15,        // ถ้าหมวดกินสัดส่วน > 15% ของรายจ่ายรวม → น่าสนใจ
+  OUTLIER_MULTIPLIER: 1.3,           // มากกว่า median/เฉลี่ย 1.3 เท่า → ถือว่าโผล่
+  ESSENTIAL_CATEGORIES: ['บิล/สาธารณูปโภค', 'ค่าเช่า', 'ที่อยู่อาศัย', 'การเดินทางจำเป็น'],
+};
+
 
 function confirmFlex({ type, amount, category, note, date, payload }) {
   const isIncome = type === 'รายรับ';
