@@ -128,17 +128,16 @@ const CATS_INCOME = [
 // แปลงข้อความเป็นตัวพิมพ์เล็ก และจัดการกรณี null/undefined
 function normalize(s) { return String(s || '').toLowerCase(); }
 
-// แยกจำนวนเงินออกจากข้อความ รองรับรูปแบบต่างๆ เช่น
-// - "1234" -> 1234
-// - "1,234.56" -> 1234.56
-// - "1 234.5" -> 1234.50
+// ดึงจำนวนเงินจากข้อความ ให้รองรับเลขใหญ่ ๆ และคอมม่า เช่น 1,200 / 25,000.50 / 300000
 function extractAmount(text) {
-  const m = String(text).match(/(\d{1,3}(?:[, ]\d{3})*|\d+)(?:[.,](\d{1,2}))?/);
+  if (!text) return null;
+  const cleaned = String(text).replace(/\s+/g, '');
+  // จับรูปแบบ: 1,234,567.89 หรือ 1234567.89 หรือ 1234
+  const m = cleaned.match(/(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/);
   if (!m) return null;
-  const num = (m[1] || '').replace(/[ ,]/g, '');
-  const dec = m[2] ? '.' + m[2] : '';
-  const val = Number(num + dec);
-  return Number.isFinite(val) ? val : null;
+  const raw = m[0].replace(/,/g, ''); // ลบคอมม่าทุกตำแหน่ง  <-- FIX
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 // 🤖 ระบบเดาอัตโนมัติว่าเป็นรายรับหรือรายจ่าย
@@ -301,8 +300,10 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
 // แปลงข้อมูลเป็น URL encoded string เพื่อส่งผ่าน LINE postback
 // จำกัดความยาว note ไม่เกิน 40 ตัวอักษร
 function buildSavePayload({ type, amount, category, note }) {
+  // ทำจำนวนเงินให้เป็น “เลขล้วน” เสมอ (กันคอมม่า)  <-- FIX
+  const amt = Number(String(amount).replace(/,/g, ''));
   const shortNote = String(note || '').slice(0, 40);
-  const params = new URLSearchParams({ action: 'save', type, amount: String(amount), category, note: shortNote });
+  const params = new URLSearchParams({ action: 'save', type, amount: String(amt), category, note: shortNote });
   return params.toString();
 }
 
@@ -341,7 +342,7 @@ app.get('/debug/models', async (req, res) => {
         name: m.name,
         displayName: m.displayName,
         supportedGenerationMethods: m.supportedGenerationMethods
-      }));
+      })); 
       return res.json({ models });
     } catch (e) {
       lastErr = e;
@@ -370,7 +371,8 @@ async function handleEvent(event) {
 
     if (action === 'save') {
       const type = p.get('type') || 'รายจ่าย';
-      const amount = Number(p.get('amount') || '0');
+      // ลบคอมม่าก่อนแปลงเป็นตัวเลขเสมอ  <-- FIX
+      const amount = Number(String(p.get('amount') || '0').replace(/,/g, ''));
       const category = p.get('category') || 'อื่นๆ';
       const note = p.get('note') || '-';
       const date = todayTH();
@@ -394,8 +396,9 @@ async function handleEvent(event) {
   const today = todayTH();
 
   // คำสั่งเก่าแบบกำหนดชัดเจน
-  const spendRegex = /^(รายจ่าย)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
-  const incomeRegex = /^(รายรับ)\s+(\d+(?:[.,]\d+)?)\s+(.+)$/i;
+  // รองรับตัวเลขมีคอมม่าได้ เช่น 1,200 หรือ 1,234,567.89   <-- FIX (regex ใหม่)
+  const spendRegex  = /^(รายจ่าย)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
+  const incomeRegex = /^(รายรับ)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
 
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
     return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"' });
@@ -404,7 +407,8 @@ async function handleEvent(event) {
   if (spendRegex.test(text) || incomeRegex.test(text)) {
     const isSpend = spendRegex.test(text);
     const [, type, amountRaw, detail] = (isSpend ? spendRegex : incomeRegex).exec(text);
-    const amount = Number(String(amountRaw).replace(',', ''));
+    // ลบคอมม่าทุกตำแหน่งก่อนแปลงเป็น Number  <-- FIX
+    const amount = Number(String(amountRaw).replace(/,/g, ''));
     const category = detectCategory(detail, type);
     const note = detail;
     const payload = buildSavePayload({ type, amount, category, note });
