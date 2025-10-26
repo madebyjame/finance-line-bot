@@ -1,28 +1,23 @@
 /**
  * LINE Bot สำหรับบันทึกรายรับ-รายจ่าย อัตโนมัติลงใน Google Sheets
- * Features:
- * - บันทึกรายรับ/รายจ่ายจากข้อความแชท (เช่น "กาแฟ 60", "เงินเดือน 30000")
- * - วิเคราะห์ค่าใช้จ่ายด้วย Gemini AI
- * - แสดงแดชบอร์ดสรุปและกราฟวิเคราะห์
- * - ส่งออกข้อมูลเป็น Excel ได้ (placeholder)
+ * - บันทึกรายรับ/รายจ่ายจากแชต (รองรับเลขใหญ่/คอมม่า)
+ * - วิเคราะห์ด้วย Gemini (ต่อผู้ใช้)
+ * - แดชบอร์ดพร้อมปุ่มช่วงเวลา (ต่อผู้ใช้)
+ * - แยกข้อมูลเป็น "แท็บชีตต่อผู้ใช้" อัตโนมัติ
  */
 
 const fs = require("fs");
-// สร้าง Google Service Account credentials เป็นไฟล์ชั่วคราว (สำหรับ Railway)
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
   const path = "/tmp/google.json";
   fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
   process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
 }
 
-// โหลดค่า environment variables จากไฟล์ .env
 require('dotenv').config();
-
-// โหลด dependencies หลัก
-const express = require('express');                     // เว็บเซิร์ฟเวอร์
-const { Client, middleware } = require('@line/bot-sdk'); // LINE Bot SDK
-const { google } = require('googleapis');               // Google Sheets API
-const axios = require('axios');                         // HTTP client
+const express = require('express');
+const { Client, middleware } = require('@line/bot-sdk');
+const { google } = require('googleapis');
+const axios = require('axios');
 
 const app = express();
 
@@ -34,42 +29,55 @@ const lineClient = new Client(lineConfig);
 
 // ===== THEME (Modern UI) =====
 const THEME = {
-  accent: '#4F46E5',       // indigo-600
-  accentSoft: '#EEF2FF',   // indigo-50
-  danger: '#EF4444',       // red-500
+  accent: '#4F46E5',
+  accentSoft: '#EEF2FF',
+  danger: '#EF4444',
   textMuted: '#8B95A1',
   textStrong: '#111827',
 };
 
-// -------- Google Sheets --------
+// -------- Google Sheets (ฐานกลาง) --------
+const auth = new google.auth.GoogleAuth({
+  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
+  scopes: ['https://www.googleapis.com/auth/spreadsheets']
+});
+const sheets = google.sheets({ version: 'v4', auth });
+const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 
-// ============================ PER-USER SHEET HELPERS ============================
-// สร้างชื่อแท็บจาก userId ให้ปลอดภัย (สั้น กระชับ ไม่มีอักขระต้องห้าม)
-function sheetTitleForUser(userId) {
-  const uid = String(userId || 'unknown');
-  // ใช้ท้าย 8 ตัวอักษร กันชื่อยาว/ข้อมูลส่วนตัว
-  const tail = uid.slice(-8).replace(/[^A-Za-z0-9_-]/g, '');
-  return `U_${tail}`; // เช่น U_ab12CD34
+// (ยังเก็บ helper เก่าไว้ เผื่อใช้ endpoint อื่นในอนาคต)
+async function readRecentRows(limit = 120, range = 'Sheet1!A:E') {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range
+  });
+  const rows = res.data.values || [];
+  const dataRows = rows.length > 1 ? rows.slice(1) : [];
+  return dataRows.slice(-limit);
 }
 
-// ดึงรายการแท็บทั้งหมดในสเปรดชีต
+// ============================ PER-USER SHEET HELPERS ============================
+// ตั้งชื่อแท็บจาก userId (ปลอดภัยและสั้น)
+function sheetTitleForUser(userId) {
+  const uid = String(userId || 'unknown');
+  const tail = uid.slice(-8).replace(/[^A-Za-z0-9_-]/g, '');
+  return `U_${tail}`; // เช่น U_a1B2c3D4
+}
+
+// รายชื่อแท็บทั้งหมด
 async function listSheetTitles() {
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
   return (meta.data.sheets || []).map(s => s.properties?.title).filter(Boolean);
 }
 
-// ถ้าไม่มีแท็บ ก็สร้าง พร้อมตั้งหัวตาราง
+// สร้างแท็บ + หัวตาราง ถ้ายังไม่มี
 async function ensureUserSheet(userId) {
   const title = sheetTitleForUser(userId);
   const titles = await listSheetTitles();
   if (!titles.includes(title)) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title } } }]
-      }
+      requestBody: { requests: [{ addSheet: { properties: { title } } }] }
     });
-    // ใส่หัวตาราง A:F
     await sheets.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
       range: `${title}!A1:F1`,
@@ -80,7 +88,7 @@ async function ensureUserSheet(userId) {
   return title;
 }
 
-// บันทึกแถวลงแท็บของผู้ใช้
+// บันทึกลงแท็บของผู้ใช้
 async function appendRowToUser(userId, values) {
   const title = await ensureUserSheet(userId);
   return sheets.spreadsheets.values.append({
@@ -91,7 +99,7 @@ async function appendRowToUser(userId, values) {
   });
 }
 
-// อ่านข้อมูลล่าสุดจากแท็บของผู้ใช้
+// อ่านข้อมูลเฉพาะผู้ใช้
 async function readRecentRowsForUser(userId, limit = 1000) {
   const title = await ensureUserSheet(userId);
   const res = await sheets.spreadsheets.values.get({
@@ -103,57 +111,6 @@ async function readRecentRowsForUser(userId, limit = 1000) {
   return dataRows.slice(-limit);
 }
 // ============================ END PER-USER SHEET HELPERS ============================
-
-
-const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-const sheets = google.sheets({ version: 'v4', auth });
-
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
-const SHEET_RANGE = process.env.SHEET_RANGE || 'Sheet1!A:E';
-
-function headRangeFrom(range) {
-  const sheetTitle = (range.includes('!') ? range.split('!')[0] : 'Sheet1');
-  return `${sheetTitle}!A1:E1`;
-}
-
-async function ensureHeader() {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: headRangeFrom(SHEET_RANGE)
-  });
-  const hasHeader = res.data.values && res.data.values.length > 0;
-  if (!hasHeader) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: headRangeFrom(SHEET_RANGE),
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [['วันที่', 'ประเภท', 'จำนวน', 'หมวดหมู่', 'รายละเอียด']] }
-    });
-  }
-}
-
-async function appendRow(values) {
-  await ensureHeader();
-  return sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
-    range: SHEET_RANGE,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [values] }
-  });
-}
-
-async function readRecentRows(limit = 120) {
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: SHEET_RANGE
-  });
-  const rows = res.data.values || [];
-  const dataRows = rows.length > 1 ? rows.slice(1) : [];
-  return dataRows.slice(-limit);
-}
 
 // -------- Helpers: Date / Format --------
 function todayTH() {
@@ -183,10 +140,10 @@ const CATS_INCOME = [
   { name: 'การเงิน/ลงทุน', kws: ['ดอกเบี้ย','ปันผล','หุ้น','คริปโต'] }
 ];
 
-// 🛠️ Utilities
+// Utils
 function normalize(s) { return String(s || '').toLowerCase(); }
 
-// รองรับเลขใหญ่/คอมม่า/ทศนิยม เช่น 1,234,567.89 หรือ 25000
+// ดึงจำนวนเงิน (รองรับ 1,234,567.89 และ 25000)
 function extractAmount(text) {
   if (!text) return null;
   const cleaned = String(text).replace(/\s+/g, '');
@@ -221,17 +178,17 @@ function stripNote(text) {
 }
 
 // ============================ DASHBOARD HELPERS ============================
-// แปลงวันที่รูปแบบไทย (เช่น 26/10/2568) เป็น Date JS (แปลง พ.ศ. → ค.ศ.)
+// แปลงวันที่ไทย → Date JS
 function parseThaiDate(s) {
   if (!s) return null;
   const parts = String(s).split('/');
   if (parts.length !== 3) return new Date(s);
   let [d, m, y] = parts.map(x => parseInt(x, 10));
-  if (y > 2400) y -= 543; // พ.ศ. → ค.ศ.
+  if (y > 2400) y -= 543;
   return new Date(y, m - 1, d);
 }
 
-// ตรวจว่า date อยู่ในช่วง [start, end] หรือไม่ (ไม่สนเวลา)
+// อยู่ในช่วงวันหรือไม่
 function isWithin(d, start, end) {
   if (!d) return false;
   const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -240,9 +197,9 @@ function isWithin(d, start, end) {
   return dd >= ss && dd <= ee;
 }
 
-// แปลงโค้ดช่วงเวลา (1y, 6m, 3m, 1m, 1w) → วันที่เริ่ม/สิ้นสุด
+// โค้ดช่วงเวลา → ช่วงวันที่
 function getRangeDates(rangeCode) {
-  const end = new Date(); // วันนี้
+  const end = new Date();
   const start = new Date(end);
   switch (rangeCode) {
     case '1y': start.setFullYear(end.getFullYear() - 1); break;
@@ -250,83 +207,52 @@ function getRangeDates(rangeCode) {
     case '3m': start.setMonth(end.getMonth() - 3); break;
     case '1m': start.setMonth(end.getMonth() - 1); break;
     case '1w': start.setDate(end.getDate() - 7); break;
-    default:   start.setMonth(end.getMonth() - 1); // ดีฟอลต์ 1 เดือน
+    default:   start.setMonth(end.getMonth() - 1);
   }
   return { start, end };
 }
 
-// สร้าง URL กราฟด้วย QuickChart
+// สร้าง URL กราฟ QuickChart
 function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
   const base = 'https://quickchart.io/chart';
   return `${base}?c=${encodeURIComponent(JSON.stringify(config))}&w=${w}&h=${h}`;
 }
 
-// อ่านข้อมูลล่าสุด (ยังไม่แยก user) — ใช้ข้อมูลรวมไปก่อน
-async function readRecentRowsForUser(userId, limit = 1000) {
-  return readRecentRows(limit);
-}
-
-// คำนวณสรุป และสร้างลิงก์กราฟ (แท่ง: รับ/จ่าย รวม, พาย: รายจ่ายตามหมวด)
+// สร้างภาพสรุปแดชบอร์ดจากข้อมูลของผู้ใช้
 async function buildDashboardImages(userId, rangeCode = '1m') {
   const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
 
   const { start, end } = getRangeDates(rangeCode);
+  const inRange = rows.filter(r => isWithin(parseThaiDate(r[0]), start, end));
+  if (inRange.length === 0) return { note: 'ช่วงเวลานี้ยังไม่มีรายการครับ' };
 
-  // กรองตามช่วงเวลา
-  const inRange = rows.filter(r => {
-    const d = parseThaiDate(r[0]); // คอลัมน์ A = วันที่ (th-TH)
-    return isWithin(d, start, end);
-  });
-
-  if (inRange.length === 0) {
-    return { note: 'ช่วงเวลานี้ยังไม่มีรายการครับ' };
-  }
-
-  // รวมยอด และแตกหมวดหมู่รายจ่าย
-  let sumIncome = 0;
-  let sumExpense = 0;
+  let sumIncome = 0, sumExpense = 0;
   const catExpense = {};
   for (const r of inRange) {
     const type = r[1];
     const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
     const cat = r[3] || 'อื่นๆ';
     if (type === 'รายรับ') sumIncome += amt;
-    else if (type === 'รายจ่าย') {
-      sumExpense += amt;
-      catExpense[cat] = (catExpense[cat] || 0) + amt;
-    }
+    else if (type === 'รายจ่าย') { sumExpense += amt; catExpense[cat] = (catExpense[cat] || 0) + amt; }
   }
   const balance = sumIncome - sumExpense;
 
-  // กราฟแท่ง: รายรับ/รายจ่ายรวม
   const barConfig = {
     type: 'bar',
-    data: {
-      labels: ['รวม'],
-      datasets: [
-        { label: 'รายรับ', data: [sumIncome] },
-        { label: 'รายจ่าย', data: [sumExpense] }
-      ]
-    },
+    data: { labels: ['รวม'], datasets: [{ label: 'รายรับ', data: [sumIncome] }, { label: 'รายจ่าย', data: [sumExpense] }] },
     options: { plugins: { legend: { position: 'bottom' } } }
   };
-
-  // กราฟพาย: รายจ่ายตามหมวด
   const pieLabels = Object.keys(catExpense);
   const pieData = Object.values(catExpense);
   const pieConfig = {
     type: 'pie',
-    data: {
-      labels: pieLabels.length ? pieLabels : ['ไม่มีรายจ่าย'],
-      datasets: [{ data: pieData.length ? pieData : [1] }]
-    },
+    data: { labels: pieLabels.length ? pieLabels : ['ไม่มีรายจ่าย'], datasets: [{ data: pieData.length ? pieData : [1] }] },
     options: { plugins: { legend: { position: 'bottom' } } }
   };
 
   const barUrl = buildQuickChartUrl(barConfig);
   const pieUrl = buildQuickChartUrl(pieConfig, { w: 600, h: 600 });
-
   const pretty = (n) => Number(n).toLocaleString();
   const note = [
     `ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
@@ -353,8 +279,8 @@ const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 45000);
 async function callGeminiModel({ model, apiKey, prompt }) {
   const url = `https://generativelanguage.googleapis.com/v1/${model}:generateContent`;
   const body = { contents: [{ parts: [{ text: prompt }]}] };
-
   let lastErr = null;
+
   for (let i = 0; i < 3; i++) {
     try {
       const res = await axios.post(url, body, {
@@ -368,7 +294,7 @@ async function callGeminiModel({ model, apiKey, prompt }) {
     } catch (err) {
       lastErr = err;
       const status = err?.response?.status;
-      if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
+      if ([429,500,502,503,504].includes(status)) {
         await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
         continue;
       } else {
@@ -381,10 +307,7 @@ async function callGeminiModel({ model, apiKey, prompt }) {
 
 async function analyzeWithGemini() {
   const rows = await readRecentRows(120);
-  if (rows.length === 0) {
-    return 'ยังไม่มีข้อมูล ลองพิมพ์ "รายจ่าย 120 คาเฟ่" ก่อนนะ';
-  }
-
+  if (rows.length === 0) return 'ยังไม่มีข้อมูล ลองพิมพ์ "รายจ่าย 120 คาเฟ่" ก่อนนะ';
   const lines = rows.map(r => {
     const [date, type, amount, category] = r;
     return `${date} | ${type} | ${amount} | ${category || '-'}`;
@@ -396,9 +319,9 @@ ${lines}
 
 โจทย์:
 1) สรุปเดือนล่าสุด: ใช้จ่ายหมวดไหนเยอะสุดและประมาณเท่าไหร่
-2) แนะนำแบบทำได้จริง 3 ข้อ (เช่น ลดหมวดไหนกี่ครั้ง/สัปดาห์ จะออมเพิ่มได้ประมาณเท่าไร/เดือน)
+2) แนะนำแบบทำได้จริง 3 ข้อ
 3) ถ้าต้องการ DCA เดือนละ 3,000 บาท ควรตัดจากหมวดใดจึงกระทบน้อยที่สุด
-ย่อ กระชับ เป็น bullet และใส่ตัวเลขประมาณการให้ด้วย
+ย่อ กระชับ เป็น bullet และใส่ตัวเลขประมาณการ
 `.trim();
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -410,12 +333,48 @@ ${lines}
       return text;
     } catch (e) {
       const status = e?.response?.status;
-      if (status === 404) continue;
-      if (status === 503 || status === 502 || status === 504 || status === 500 || status === 429) continue;
+      if ([404,429,500,502,503,504].includes(status)) continue;
       return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
     }
   }
-  return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
+  return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ครับ';
+}
+
+// วิเคราะห์เฉพาะของผู้ใช้ (เวอร์ชัน per-user)
+async function analyzeWithGeminiForUser(userId) {
+  const rows = await readRecentRowsForUser(userId, 300);
+  if (!rows || rows.length === 0) return 'ยังไม่มีข้อมูลของคุณเลยครับ ลองบันทึกก่อนนะ';
+
+  const lines = rows.map(r => {
+    const [date, type, amount, category] = r;
+    return `${date} | ${type} | ${amount} | ${category || '-'}`;
+  }).join('\n');
+
+  const prompt = `
+ข้อมูลรายรับ-รายจ่าย (เฉพาะผู้ใช้นี้):
+${lines}
+
+โจทย์:
+1) สรุปเดือนล่าสุด: ใช้จ่ายหมวดไหนเยอะสุดและประมาณเท่าไหร่
+2) แนะนำแบบทำได้จริง 3 ข้อ
+3) ถ้าต้องการ DCA เดือนละ 3,000 บาท ควรตัดจากหมวดใดจึงกระทบน้อยที่สุด
+ย่อ กระชับ เป็น bullet และใส่ตัวเลขประมาณการ
+`.trim();
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
+
+  for (const model of MODEL_LIST) {
+    try {
+      const text = await callGeminiModel({ model, apiKey, prompt });
+      return text;
+    } catch (e) {
+      const status = e?.response?.status;
+      if ([404,429,500,502,503,504].includes(status)) continue;
+      return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
+    }
+  }
+  return 'Gemini ช้า/ล่มชั่วคราว ลองใหม่อีกครั้งครับ';
 }
 
 // 🎨 Flex UI
@@ -453,20 +412,20 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
       },
       footer: {
         type: 'box', layout: 'horizontal', spacing: 'md', contents: [
-          { type: 'button', style: 'primary', color: THEME.accent, height: 'sm', action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' } },
-          { type: 'button', style: 'secondary', color: THEME.accentSoft, height: 'sm', action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
+          { type: 'button', style: 'primary', color: THEME.accent, height: 'sm',
+            action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' } },
+          { type: 'button', style: 'secondary', color: THEME.accentSoft, height: 'sm',
+            action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
         ]
       }
     }
   };
 }
 
-// เมนูแดชบอร์ด (ช่วงเวลา + Export)
 function buildDashboardMenuFlex() {
   const GREEN = '#16A34A';
   const TEXT = '#111111';
   const MUTED = '#8B95A1';
-
   return {
     type: 'flex',
     altText: 'แดชบอร์ดการเงิน',
@@ -541,9 +500,7 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Bot พร้อมทำงาน');
-});
+app.get('/', (req, res) => { res.send('Bot พร้อมทำงาน'); });
 
 app.get('/debug/models', async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -555,15 +512,13 @@ app.get('/debug/models', async (req, res) => {
     try {
       const r = await axios.get(url, { headers: { 'x-goog-api-key': apiKey }, timeout: Number(process.env.AI_TIMEOUT_MS || 45000) });
       const models = (r.data?.models || []).map(m => ({
-        name: m.name,
-        displayName: m.displayName,
-        supportedGenerationMethods: m.supportedGenerationMethods
-      })); 
+        name: m.name, displayName: m.displayName, supportedGenerationMethods: m.supportedGenerationMethods
+      }));
       return res.json({ models });
     } catch (e) {
       lastErr = e;
       const status = e?.response?.status;
-      if (status === 503 || status === 502 || status === 504) {
+      if ([502,503,504].includes(status)) {
         await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
         continue;
       }
@@ -591,10 +546,9 @@ async function handleEvent(event) {
       const category = p.get('category') || 'อื่นๆ';
       const note = p.get('note') || '-';
       const date = todayTH();
+      const uid = event.source?.userId || '-';
       try {
-        const uid = event.source?.userId || '-';
         await appendRowToUser(uid, [date, type, amount, category, note, uid]);
-
         if (event.replyToken) {
           return lineClient.replyMessage(event.replyToken, {
             type: 'text',
@@ -636,8 +590,7 @@ async function handleEvent(event) {
       return lineClient.replyMessage(event.replyToken, msgs);
     }
 
-    // ถ้าเป็น postback แต่ไม่เข้ากรณีไหนเลย
-    return;
+    return; // postback แต่ไม่เข้ากรณีไหน
   }
 
   // ข้อความธรรมดา
@@ -651,7 +604,7 @@ async function handleEvent(event) {
     return lineClient.replyMessage(event.replyToken, flex);
   }
 
-  // คำสั่งแบบกำหนดชัดเจน (รองรับเลขมีคอมม่า/ทศนิยม)
+  // ฟอร์แมตชัดเจน (รองรับคอมม่า/ทศนิยม)
   const spendRegex  = /^(รายจ่าย)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
   const incomeRegex = /^(รายรับ)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
 
@@ -673,7 +626,7 @@ async function handleEvent(event) {
     return lineClient.replyMessage(event.replyToken, flex);
   }
 
-  // โหมดเดาอัตโนมัติ: พิมพ์ "กาแฟ 65" หรือ "เงินเดือน 15000"
+  // โหมดเดาอัตโนมัติ
   const amt = extractAmount(text);
   if (amt && amt > 0) {
     const type = detectType(text);
@@ -684,21 +637,23 @@ async function handleEvent(event) {
     return lineClient.replyMessage(event.replyToken, flex);
   }
 
-  // วิเคราะห์ด้วย AI
-if (text === 'วิเคราะห์') {
-  const uid = event.source?.userId;
-  if (uid) {
-    await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ข้อมูลของคุณ แป๊บเดียวครับ...' });
-    analyzeWithGeminiForUser(uid)
-      .then(msg => lineClient.pushMessage(uid, { type: 'text', text: msg }))
-      .catch(err => lineClient.pushMessage(uid, { type: 'text', text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}` }));
-    return;
-  } else {
-    const advice = await analyzeWithGemini();
-    return lineClient.replyMessage(event.replyToken, { type: 'text', text: advice });
+  // วิเคราะห์ (เฉพาะข้อมูลของผู้ใช้)
+  if (text === 'วิเคราะห์') {
+    const uid = event.source?.userId;
+    if (uid) {
+      await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ข้อมูลของคุณ แป๊บเดียวครับ...' });
+      analyzeWithGeminiForUser(uid)
+        .then(msg => lineClient.pushMessage(uid, { type: 'text', text: msg }))
+        .catch(err => lineClient.pushMessage(uid, {
+          type: 'text',
+          text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
+        }));
+      return;
+    } else {
+      const advice = await analyzeWithGemini();
+      return lineClient.replyMessage(event.replyToken, { type: 'text', text: advice });
+    }
   }
-}
-
 
   // เมนูช่วยเหลือ
   const help = [
@@ -708,7 +663,7 @@ if (text === 'วิเคราะห์') {
     '• รายจ่าย 120 คาเฟ่  → (กำหนดเอง)',
     '• รายรับ 15000 เงินเดือน  → (กำหนดเอง)',
     '• แดชบอร์ด  → (ดูกราฟสรุป)',
-    '• วิเคราะห์  → (สรุปด้วย AI)'
+    '• วิเคราะห์  → (สรุปด้วย AI เฉพาะของคุณ)'
   ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
