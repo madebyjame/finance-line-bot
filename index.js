@@ -599,7 +599,7 @@ async function handleEvent(event) {
   const today = todayTH();
 
   // เมนูแดชบอร์ด
-  if (/^แดชบอร์ด$/i.test(text)) {
+  if (/^(แดชบอร์ด|dashboard|ดูสรุป|รายงาน)$/i.test(text)) {
     const flex = buildDashboardMenuFlex();
     return lineClient.replyMessage(event.replyToken, flex);
   }
