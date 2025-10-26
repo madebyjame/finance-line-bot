@@ -264,9 +264,9 @@ function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
 // UI จะปรับเปลี่ยนตามประเภท (รายรับ/รายจ่าย)
 function confirmFlex({ type, amount, category, note, date, payload }) {
   const isIncome = type === 'รายรับ';
-  const title = isIncome ? 'บันทึกรายรับ?' : 'บันทึกรายจ่าย?';
+  const title = isIncome ? 'บันทึกรายรับ นี้ใช่ไหมครับ?' : 'บันทึกรายจ่าย นี้ใช่ไหมครับ ?';
   const icon = isIncome ? '💸' : '🧾';
-  const amountTxt = `${amount.toLocaleString()} บ.`;
+  const amountTxt = `${amount.toLocaleString()} บาท`;
   const chips = [ chip(type), chip(category) ];
 
   return {
