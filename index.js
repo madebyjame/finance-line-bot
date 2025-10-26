@@ -4,7 +4,7 @@
  * - บันทึกรายรับ/รายจ่ายจากข้อความแชท (เช่น "กาแฟ 60", "เงินเดือน 30000")
  * - วิเคราะห์ค่าใช้จ่ายด้วย Gemini AI
  * - แสดงแดชบอร์ดสรุปและกราฟวิเคราะห์
- * - ส่งออกข้อมูลเป็น Excel ได้
+ * - ส่งออกข้อมูลเป็น Excel ได้ (placeholder)
  */
 
 const fs = require("fs");
@@ -17,11 +17,12 @@ if (process.env.GOOGLE_CREDENTIALS_JSON) {
 
 // โหลดค่า environment variables จากไฟล์ .env
 require('dotenv').config();
+
 // โหลด dependencies หลัก
-const express = require('express');          // เว็บเซิร์ฟเวอร์
-const { Client, middleware } = require('@line/bot-sdk');  // LINE Bot SDK
-const { google } = require('googleapis');    // Google Sheets API
-const axios = require('axios');              // HTTP client สำหรับเรียก APIs
+const express = require('express');                     // เว็บเซิร์ฟเวอร์
+const { Client, middleware } = require('@line/bot-sdk'); // LINE Bot SDK
+const { google } = require('googleapis');               // Google Sheets API
+const axios = require('axios');                         // HTTP client
 
 const app = express();
 
@@ -97,15 +98,11 @@ function todayTH() {
 }
 
 // -------- Classifier: Type & Category (TH) --------
-// 🔍 คำสำคัญสำหรับระบบเดาอัตโนมัติว่าเป็นรายรับหรือรายจ่าย
-// ใช้ตอนผู้ใช้พิมพ์แบบสั้น เช่น "กาแฟ 60" (รายจ่าย) หรือ "ได้เงิน 500" (รายรับ)
 const KW = {
   income: [ 'รายรับ','รับ','ได้','โอนเข้า','เงินเดือน','โบนัส','ทิป','ขายได้','ดอกเบี้ย','ปันผล' ],
   expense: [ 'รายจ่าย','จ่าย','ซื้อ','โอนออก','เติม','ค่าผ่อน','ผ่อน','ค่าสมาชิก','ค่าใช้จ่าย' ],
 };
 
-// 📂 หมวดหมู่รายจ่าย พร้อมคำสำคัญสำหรับระบบเดาอัตโนมัติ
-// เมื่อผู้ใช้พิมพ์ "กาแฟ 60" ระบบจะเดาว่าเป็นหมวด "อาหาร/กาแฟ" เป็นต้น
 const CATS_EXPENSE = [
   { name: 'อาหาร/กาแฟ', kws: ['ข้าว','อาหาร','ข้าวเที่ยง','ข้าวเย็น','ของกิน','กาแฟ','คาเฟ่','ชานม','ของหวาน','ส้มตำ','ก๋วยเตี๋ยว','หมูกระทะ'] },
   { name: 'เดินทาง', kws: ['รถ','น้ำมัน','เติมน้ำมัน','มอเตอร์ไซค์','แท็กซี่','แกร็บ','บีทีเอส','mrt','ตั๋ว','ค่าทางด่วน','ที่จอด'] },
@@ -123,26 +120,20 @@ const CATS_INCOME = [
   { name: 'การเงิน/ลงทุน', kws: ['ดอกเบี้ย','ปันผล','หุ้น','คริปโต'] }
 ];
 
-// 🛠️ Utility functions สำหรับประมวลผลข้อความ
-
-// แปลงข้อความเป็นตัวพิมพ์เล็ก และจัดการกรณี null/undefined
+// 🛠️ Utilities
 function normalize(s) { return String(s || '').toLowerCase(); }
 
-// ดึงจำนวนเงินจากข้อความ ให้รองรับเลขใหญ่ ๆ และคอมม่า เช่น 1,200 / 25,000.50 / 300000
+// รองรับเลขใหญ่/คอมม่า/ทศนิยม เช่น 1,234,567.89 หรือ 25000
 function extractAmount(text) {
   if (!text) return null;
   const cleaned = String(text).replace(/\s+/g, '');
-  // จับรูปแบบ: 1,234,567.89 หรือ 1234567.89 หรือ 1234
   const m = cleaned.match(/(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/);
   if (!m) return null;
-  const raw = m[0].replace(/,/g, ''); // ลบคอมม่าทุกตำแหน่ง  <-- FIX
+  const raw = m[0].replace(/,/g, '');
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
-// 🤖 ระบบเดาอัตโนมัติว่าเป็นรายรับหรือรายจ่าย
-// ใช้คำสำคัญจาก KW.income และ KW.expense ในการเดา
-// ถ้าไม่ชัดเจน จะเดาว่าเป็นรายจ่าย (default)
 function detectType(text) {
   const t = normalize(text);
   const isIncome = KW.income.some(k => t.includes(k.toLowerCase()));
@@ -153,9 +144,6 @@ function detectType(text) {
   return 'รายจ่าย';
 }
 
-// 🏷️ ระบบเดาหมวดหมู่อัตโนมัติจากคำในข้อความ
-// ใช้คำสำคัญจาก CATS_INCOME และ CATS_EXPENSE
-// ถ้าไม่ตรงกับหมวดไหนเลย จะเป็น "อื่นๆ"
 function detectCategory(text, type) {
   const t = normalize(text);
   const list = type === 'รายรับ' ? CATS_INCOME : CATS_EXPENSE;
@@ -204,7 +192,7 @@ function getRangeDates(rangeCode) {
   return { start, end };
 }
 
-// สร้าง URL กราฟด้วย QuickChart (ไม่ต้องโฮสต์รูปเอง)
+// สร้าง URL กราฟด้วย QuickChart
 function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
   const base = 'https://quickchart.io/chart';
   return `${base}?c=${encodeURIComponent(JSON.stringify(config))}&w=${w}&h=${h}`;
@@ -367,9 +355,7 @@ ${lines}
   return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
 }
 
-// 🎨 ส่วนสร้าง UI ด้วย Flex Message
-// สร้างป้ายชิป (chip) แสดงประเภทและหมวดหมู่
-// เช่น [รายจ่าย] [อาหาร/กาแฟ]
+// 🎨 Flex UI
 function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   return {
     type: 'box', layout: 'baseline', backgroundColor: bg, cornerRadius: '12px', paddingAll: '6px',
@@ -377,9 +363,6 @@ function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   };
 }
 
-// 🎯 สร้างหน้ายืนยันการบันทึกด้วย Flex Message
-// แสดงรายละเอียดการบันทึก พร้อมปุ่มยืนยัน/ยกเลิก
-// UI จะปรับเปลี่ยนตามประเภท (รายรับ/รายจ่าย)
 function confirmFlex({ type, amount, category, note, date, payload }) {
   const isIncome = type === 'รายรับ';
   const title = isIncome ? 'บันทึกรายรับ นี้ใช่ไหมครับ?' : 'บันทึกรายจ่าย นี้ใช่ไหมครับ ?';
@@ -415,13 +398,9 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
   };
 }
 
-// 🔄 สร้าง payload สำหรับส่งข้อมูลกลับมาเมื่อกดปุ่มบันทึก
-// แปลงข้อมูลเป็น URL encoded string เพื่อส่งผ่าน LINE postback
-// จำกัดความยาว note ไม่เกิน 40 ตัวอักษร
-// ============================ FLEX DASHBOARD MENU ============================
-// เมนูแดชบอร์ดสไตล์มินิมอล: 1 year / 6 เดือน / 3 เดือน / 1 เดือน / 1 week + Export Excel
+// เมนูแดชบอร์ด (ช่วงเวลา + Export)
 function buildDashboardMenuFlex() {
-  const GREEN = '#16A34A'; // ปุ่ม Export สีเขียวเด่น
+  const GREEN = '#16A34A';
   const TEXT = '#111111';
   const MUTED = '#8B95A1';
 
@@ -472,11 +451,9 @@ function buildDashboardMenuFlex() {
     }
   };
 }
-// ============================ END FLEX DASHBOARD MENU ============================
 
-
+// -------- Payload Builder --------
 function buildSavePayload({ type, amount, category, note }) {
-  // ทำจำนวนเงินให้เป็น “เลขล้วน” เสมอ (กันคอมม่า)  <-- FIX
   const amt = Number(String(amount).replace(/,/g, ''));
   const shortNote = String(note || '').slice(0, 40);
   const params = new URLSearchParams({ action: 'save', type, amount: String(amt), category, note: shortNote });
@@ -490,7 +467,7 @@ app.get('/webhook', (req, res) => {
 
 app.post('/webhook', middleware(lineConfig), (req, res) => {
   try {
-    res.sendStatus(200);
+    res.sendStatus(200); // ตอบ 200 ทันที กัน timeout
     const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
     const events = Array.isArray(body.events) ? body.events : [];
     Promise.all(events.map(e => handleEvent(e))).catch(err => {
@@ -547,7 +524,6 @@ async function handleEvent(event) {
 
     if (action === 'save') {
       const type = p.get('type') || 'รายจ่าย';
-      // ลบคอมม่าก่อนแปลงเป็นตัวเลขเสมอ  <-- FIX
       const amount = Number(String(p.get('amount') || '0').replace(/,/g, ''));
       const category = p.get('category') || 'อื่นๆ';
       const note = p.get('note') || '-';
@@ -555,22 +531,27 @@ async function handleEvent(event) {
       try {
         await appendRow([date, type, amount, category, note]);
         if (event.replyToken) {
-          return lineClient.replyMessage(event.replyToken, { type: 'text', text: `บันทึกแล้ว: ${type} ${amount.toLocaleString()} บ. • ${category} • ${date} ✅` });
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: `บันทึกแล้ว: ${type} ${amount.toLocaleString()} บ. • ${category} • ${date} ✅`
+          });
         }
       } catch (err) {
         if (event.replyToken) {
-          return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'บันทึกไม่ผ่าน เช็กสิทธิ์ชีต/ค่า .env ก่อนครับ' });
+          return lineClient.replyMessage(event.replyToken, {
+            type: 'text',
+            text: 'บันทึกไม่ผ่าน เช็กสิทธิ์ชีต/ค่า .env ก่อนครับ'
+          });
         }
       }
       return;
     }
-  }
-      // ===== Dash range & export =====
-    if (action === 'dash') {
-      const range = p.get('range');         // '1y' | '6m' | '3m' | '1m' | '1w'
-      const doing = p.get('do');            // 'export_excel' (ถ้ามี)
 
-      // ปุ่ม Export Excel (เวอร์ชัน placeholder — เดี๋ยวค่อยเชื่อม exceljs/endpoint)
+    // ===== Dash range & export =====
+    if (action === 'dash') {
+      const range = p.get('range');   // '1y' | '6m' | '3m' | '1m' | '1w'
+      const doing = p.get('do');      // 'export_excel' หรือ undefined
+
       if (doing === 'export_excel') {
         return lineClient.replyMessage(event.replyToken, {
           type: 'text',
@@ -578,46 +559,47 @@ async function handleEvent(event) {
         });
       }
 
-      // ผู้ใช้เลือกช่วงเวลา → สร้างสรุปและกราฟ
       const userId = event.source?.userId || 'anonymous';
       const dash = await buildDashboardImages(userId, range || '1m');
 
-      // ตอบสรุป + กราฟ (ส่งเป็นรูปภาพจาก quickchart)
       const msgs = [];
-      if (dash.note) msgs.push({ type: 'text', text: dash.note });
+      if (dash.note)   msgs.push({ type: 'text',  text: dash.note });
       if (dash.barUrl) msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
       if (dash.pieUrl) msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
 
-      if (msgs.length === 0) {
-        msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
-      }
+      if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
       return lineClient.replyMessage(event.replyToken, msgs);
     }
+
+    // ถ้าเป็น postback แต่ไม่เข้ากรณีไหนเลย
+    return;
+  }
 
   // ข้อความธรรมดา
   if (event.type !== 'message' || event.message.type !== 'text') return;
   const text = event.message.text.trim();
   const today = todayTH();
 
-  // คำสั่งเก่าแบบกำหนดชัดเจน
-  // รองรับตัวเลขมีคอมม่าได้ เช่น 1,200 หรือ 1,234,567.89   <-- FIX (regex ใหม่)
+  // เมนูแดชบอร์ด
+  if (/^แดชบอร์ด$/i.test(text)) {
+    const flex = buildDashboardMenuFlex();
+    return lineClient.replyMessage(event.replyToken, flex);
+  }
+
+  // คำสั่งแบบกำหนดชัดเจน (รองรับเลขมีคอมม่า/ทศนิยม)
   const spendRegex  = /^(รายจ่าย)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
   const incomeRegex = /^(รายรับ)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
 
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
-    return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"' });
-  }
-  
-  // ถ้าผู้ใช้พิมพ์ "แดชบอร์ด" ให้แสดงเมนูเลือกช่วงเวลา
-  if (/^แดชบอร์ด$/i.test(text)) {
-  const flex = buildDashboardMenuFlex();
-  return lineClient.replyMessage(event.replyToken, flex);
+    return lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: 'รูปแบบไม่ครบ ลองแบบนี้ → "รายจ่าย 120 คาเฟ่" หรือ "รายรับ 15000 เงินเดือน"'
+    });
   }
 
   if (spendRegex.test(text) || incomeRegex.test(text)) {
     const isSpend = spendRegex.test(text);
     const [, type, amountRaw, detail] = (isSpend ? spendRegex : incomeRegex).exec(text);
-    // ลบคอมม่าทุกตำแหน่งก่อนแปลงเป็น Number  <-- FIX
     const amount = Number(String(amountRaw).replace(/,/g, ''));
     const category = detectCategory(detail, type);
     const note = detail;
@@ -626,7 +608,7 @@ async function handleEvent(event) {
     return lineClient.replyMessage(event.replyToken, flex);
   }
 
-  // โหมดอัตโนมัติ: แค่พิมพ์ "กาแฟ 65" หรือ "เงินเดือน 15000"
+  // โหมดเดาอัตโนมัติ: พิมพ์ "กาแฟ 65" หรือ "เงินเดือน 15000"
   const amt = extractAmount(text);
   if (amt && amt > 0) {
     const type = detectType(text);
@@ -637,13 +619,16 @@ async function handleEvent(event) {
     return lineClient.replyMessage(event.replyToken, flex);
   }
 
-  // วิเคราะห์ (เดิม)
+  // วิเคราะห์ด้วย AI
   if (text === 'วิเคราะห์') {
     if (event.source?.userId) {
       await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ แป๊บเดียวครับ...' });
       analyzeWithGemini()
         .then(msg => lineClient.pushMessage(event.source.userId, { type: 'text', text: msg }))
-        .catch(err => lineClient.pushMessage(event.source.userId, { type: 'text', text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}` }));
+        .catch(err => lineClient.pushMessage(event.source.userId, {
+          type: 'text',
+          text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
+        }));
       return;
     } else {
       const advice = await analyzeWithGemini();
@@ -658,11 +643,13 @@ async function handleEvent(event) {
     '• เงินเดือน 15000  → (ระบบเดา: รายรับ/เงินเดือน)',
     '• รายจ่าย 120 คาเฟ่  → (กำหนดเอง)',
     '• รายรับ 15000 เงินเดือน  → (กำหนดเอง)',
+    '• แดชบอร์ด  → (ดูกราฟสรุป)',
     '• วิเคราะห์  → (สรุปด้วย AI)'
   ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
 
+// -------- Start Server --------
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
