@@ -5,6 +5,33 @@
  * - แดชบอร์ดพร้อมปุ่มช่วงเวลา (ต่อผู้ใช้)
  * - แยกข้อมูลเป็น "แท็บชีตต่อผู้ใช้" อัตโนมัติ
  */
+const { google } = require('googleapis');
+const axios = require('axios');
+// ==== เพิ่มสำหรับ Export Excel ====
+const ExcelJS = require('exceljs');
+const crypto = require('crypto');
+
+// เก็บ token ชั่วคราว -> userId (ลิงก์ดาวน์โหลด)
+const exportTokens = new Map();
+
+// base url ของโปรเจ็กต์ (ตั้งใน Railway)
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || '';
+
+// สร้าง token สำหรับดาวน์โหลดไฟล์ของ user คนนั้น ๆ (อายุ 5 นาที)
+function createExportTokenForUser(userId) {
+  const token = crypto.randomBytes(16).toString('hex');
+  exportTokens.set(token, { userId, expireAt: Date.now() + 5 * 60 * 1000 });
+  return token;
+}
+
+// ล้าง token หมดอายุทุก 1 นาที
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, info] of exportTokens.entries()) {
+    if (!info || info.expireAt <= now) exportTokens.delete(t);
+  }
+}, 60 * 1000);
+
 
 const fs = require("fs");
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
@@ -749,6 +776,69 @@ app.get('/webhook', (req, res) => {
   res.status(200).send('OK');
 });
 
+// ดาวน์โหลด Excel จาก token (ต่อ user)
+app.get('/export/:token', async (req, res) => {
+  try {
+    const token = req.params.token;
+    const info = exportTokens.get(token);
+    if (!info) return res.status(410).send('ลิงก์หมดอายุหรือไม่ถูกต้อง');
+    if (info.expireAt < Date.now()) return res.status(410).send('ลิงก์หมดอายุแล้ว');
+
+    const userId = info.userId;
+    // อ่านข้อมูลของ user คนนี้ทั้งหมด (หรือจะจำกัดจำนวนก็ได้)
+    const rows = await readRecentRowsForUser(userId, 5000); // A:F (เราบันทึก 6 คอลัมน์)
+    // rows: [date, type, amount, category, note, userId]
+
+    // สร้างไฟล์ Excel ในหน่วยความจำ
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Transactions');
+
+    // Header
+    ws.addRow(['วันที่', 'ประเภท', 'จำนวน', 'หมวดหมู่', 'รายละเอียด', 'userId']);
+    const header = ws.getRow(1);
+    header.font = { bold: true };
+    header.fill = { type: 'pattern', pattern:'solid', fgColor:{ argb:'FFE8F5E9' } }; // เขียวอ่อน
+    header.alignment = { vertical: 'middle' };
+
+    // Data rows
+    for (const r of rows) {
+      // บังคับ amount เป็นตัวเลข (ลบคอมม่า)
+      const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
+      ws.addRow([r[0] || '', r[1] || '', amt, r[3] || '', r[4] || '', r[5] || '']);
+    }
+
+    // ฟอร์แมตราคาที่คอลัมน์ C (จำนวน)
+    ws.getColumn(3).numFmt = '#,##0.00';
+    // ปรับความกว้างคร่าว ๆ
+    ws.getColumn(1).width = 14;
+    ws.getColumn(2).width = 12;
+    ws.getColumn(3).width = 14;
+    ws.getColumn(4).width = 18;
+    ws.getColumn(5).width = 30;
+    ws.getColumn(6).width = 22;
+
+    // ตั้งชื่อไฟล์
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    const filename = `finance_${y}${m}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    // เขียน workbook ลง response โดยตรง (stream)
+    await wb.xlsx.write(res);
+    res.end();
+
+    // ใช้ครั้งเดียวแล้วลบทิ้ง (ความปลอดภัยขั้นพื้นฐาน)
+    exportTokens.delete(token);
+  } catch (err) {
+    console.error('export excel error:', err);
+    res.status(500).send('สร้างไฟล์ไม่สำเร็จ');
+  }
+});
+
+
 app.post('/webhook', middleware(lineConfig), (req, res) => {
   try {
     res.sendStatus(200); // ตอบ 200 ทันที กัน timeout
@@ -833,12 +923,30 @@ async function handleEvent(event) {
       const range = p.get('range');   // '1y' | '6m' | '3m' | '1m' | '1w'
       const doing = p.get('do');      // 'export_excel' หรือ undefined
 
-      if (doing === 'export_excel') {
-        return lineClient.replyMessage(event.replyToken, {
-          type: 'text',
-          text: 'กำลังสร้างไฟล์ Excel ให้ครับ... (จะส่งลิงก์ดาวน์โหลดให้เร็ว ๆ นี้)'
-        });
-      }
+  if (doing === 'export_excel') {
+    const uid = event.source?.userId;
+    if (!uid) {
+      return lineClient.replyMessage(event.replyToken, {
+        type: 'text',
+        text: 'ตรวจไม่พบ userId ของคุณ'
+      });
+    }
+    if (!PUBLIC_BASE_URL) {
+      return lineClient.replyMessage(event.replyToken, {
+        type: 'text',
+        text: 'ยังไม่ได้ตั้ง PUBLIC_BASE_URL ใน Railway (เช่น https://your-app.up.railway.app)'
+      });
+    }
+
+    const token = createExportTokenForUser(uid);
+    const url = `${PUBLIC_BASE_URL.replace(/\/+$/,'')}/export/${token}`;
+
+    return lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `ไฟล์พร้อมแล้ว กดลิงก์เพื่อดาวน์โหลด (ลิงก์หมดอายุใน 5 นาที)\n${url}`
+    });
+  }
+
 
       const userId = event.source?.userId || 'anonymous';
       const dash = await buildDashboardImages(userId, range || '1m');
