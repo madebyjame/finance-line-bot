@@ -42,6 +42,69 @@ const THEME = {
 };
 
 // -------- Google Sheets --------
+
+// ============================ PER-USER SHEET HELPERS ============================
+// สร้างชื่อแท็บจาก userId ให้ปลอดภัย (สั้น กระชับ ไม่มีอักขระต้องห้าม)
+function sheetTitleForUser(userId) {
+  const uid = String(userId || 'unknown');
+  // ใช้ท้าย 8 ตัวอักษร กันชื่อยาว/ข้อมูลส่วนตัว
+  const tail = uid.slice(-8).replace(/[^A-Za-z0-9_-]/g, '');
+  return `U_${tail}`; // เช่น U_ab12CD34
+}
+
+// ดึงรายการแท็บทั้งหมดในสเปรดชีต
+async function listSheetTitles() {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  return (meta.data.sheets || []).map(s => s.properties?.title).filter(Boolean);
+}
+
+// ถ้าไม่มีแท็บ ก็สร้าง พร้อมตั้งหัวตาราง
+async function ensureUserSheet(userId) {
+  const title = sheetTitleForUser(userId);
+  const titles = await listSheetTitles();
+  if (!titles.includes(title)) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title } } }]
+      }
+    });
+    // ใส่หัวตาราง A:F
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `${title}!A1:F1`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [['วันที่', 'ประเภท', 'จำนวน', 'หมวดหมู่', 'รายละเอียด', 'userId']] }
+    });
+  }
+  return title;
+}
+
+// บันทึกแถวลงแท็บของผู้ใช้
+async function appendRowToUser(userId, values) {
+  const title = await ensureUserSheet(userId);
+  return sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: `${title}!A:F`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [values] }
+  });
+}
+
+// อ่านข้อมูลล่าสุดจากแท็บของผู้ใช้
+async function readRecentRowsForUser(userId, limit = 1000) {
+  const title = await ensureUserSheet(userId);
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${title}!A:F`
+  });
+  const rows = res.data.values || [];
+  const dataRows = rows.length > 1 ? rows.slice(1) : [];
+  return dataRows.slice(-limit);
+}
+// ============================ END PER-USER SHEET HELPERS ============================
+
+
 const auth = new google.auth.GoogleAuth({
   keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
   scopes: ['https://www.googleapis.com/auth/spreadsheets']
@@ -529,7 +592,9 @@ async function handleEvent(event) {
       const note = p.get('note') || '-';
       const date = todayTH();
       try {
-        await appendRow([date, type, amount, category, note]);
+        const uid = event.source?.userId || '-';
+        await appendRowToUser(uid, [date, type, amount, category, note, uid]);
+
         if (event.replyToken) {
           return lineClient.replyMessage(event.replyToken, {
             type: 'text',
@@ -620,21 +685,20 @@ async function handleEvent(event) {
   }
 
   // วิเคราะห์ด้วย AI
-  if (text === 'วิเคราะห์') {
-    if (event.source?.userId) {
-      await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ แป๊บเดียวครับ...' });
-      analyzeWithGemini()
-        .then(msg => lineClient.pushMessage(event.source.userId, { type: 'text', text: msg }))
-        .catch(err => lineClient.pushMessage(event.source.userId, {
-          type: 'text',
-          text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
-        }));
-      return;
-    } else {
-      const advice = await analyzeWithGemini();
-      return lineClient.replyMessage(event.replyToken, { type: 'text', text: advice });
-    }
+if (text === 'วิเคราะห์') {
+  const uid = event.source?.userId;
+  if (uid) {
+    await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังวิเคราะห์ข้อมูลของคุณ แป๊บเดียวครับ...' });
+    analyzeWithGeminiForUser(uid)
+      .then(msg => lineClient.pushMessage(uid, { type: 'text', text: msg }))
+      .catch(err => lineClient.pushMessage(uid, { type: 'text', text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}` }));
+    return;
+  } else {
+    const advice = await analyzeWithGemini();
+    return lineClient.replyMessage(event.replyToken, { type: 'text', text: advice });
   }
+}
+
 
   // เมนูช่วยเหลือ
   const help = [
