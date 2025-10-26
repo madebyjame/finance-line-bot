@@ -337,6 +337,89 @@ app.get('/debug/models', async (req, res) => {
   return res.status(503).json({ error: 'The service is currently unavailable (after retries).' });
 });
 
+// ============================ FLEX DASHBOARD MENU ============================
+// ฟังก์ชันนี้สร้าง Flex Message เมนูแดชบอร์ดมินิมอล
+// มีปุ่มเลือกช่วงเวลา: 1 year / 6 เดือน / 3 เดือน / 1 เดือน / 1 week
+// และปุ่ม Export Excel สีเขียวเด่น
+function buildDashboardMenuFlex() {
+  const GREEN = '#16A34A'; // สีเขียวเด่นสำหรับปุ่ม Export
+  const TEXT = '#111111'; // สีข้อความหลัก
+  const MUTED = '#8B95A1'; // สีข้อความรอง
+
+  return {
+    type: 'flex',
+    altText: 'แดชบอร์ดการเงิน',
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '16px',
+        contents: [
+          { type: 'text', text: 'แดชบอร์ดการเงิน', weight: 'bold', size: 'lg', color: TEXT },
+          { type: 'text', text: 'เลือกช่วงเวลาที่ต้องการดูสรุป', size: 'xs', color: MUTED, margin: 'sm' }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: '12px',
+        paddingAll: '16px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            spacing: '8px',
+            contents: [
+              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 year', data: 'dash?range=1y' } },
+              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '6 เดือน', data: 'dash?range=6m' } }
+            ]
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            spacing: '8px',
+            contents: [
+              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '3 เดือน', data: 'dash?range=3m' } },
+              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 เดือน', data: 'dash?range=1m' } }
+            ]
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 week', data: 'dash?range=1w' } }
+            ]
+          }
+        ]
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '16px',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            color: GREEN,
+            action: { type: 'postback', label: 'Export เป็น Excel', data: 'dash?action=export_excel' }
+          }
+        ]
+      },
+      styles: {
+        header: { backgroundColor: '#FFFFFF' },
+        body:   { backgroundColor: '#FFFFFF' },
+        footer: { backgroundColor: '#FFFFFF' }
+      }
+    }
+  };
+}
+// ============================ END FLEX DASHBOARD MENU ============================
+
+
+
 // 🧠 ส่วนหลักที่ใช้ตอบกลับข้อความผู้ใช้
 async function buildDashboardImages(userId) {
   const rows = await readRecentRowsForUser(userId, 500);
@@ -428,6 +511,12 @@ async function handleEvent(event) {
     }
   }
 
+  // ถ้าผู้ใช้พิมพ์ "แดชบอร์ด" ให้เรียกเมนู Flex ที่สร้างไว้
+  if (/^แดชบอร์ด$/i.test(text)) {
+  const flex = buildDashboardMenuFlex();
+  return lineClient.replyMessage(event.replyToken, flex);
+  }
+
   // ข้อความธรรมดา
   if (event.type !== 'message' || event.message.type !== 'text') return;
   const text = event.message.text.trim();
@@ -502,6 +591,43 @@ async function handleEvent(event) {
   ].join('\n');
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
+
+// ============================ FLEX DASHBOARD POSTBACK ============================
+// ฟังก์ชันนี้ทำงานเมื่อผู้ใช้กดปุ่มใน Flex Message
+function parsePostbackData(data) {
+  const params = {};
+  const [, qs] = String(data).split('?');
+  if (qs) qs.split('&').forEach(kv => {
+    const [k, v] = kv.split('=');
+    params[k] = v;
+  });
+  return params;
+}
+
+// ใช้ใน handleEvent(event) เมื่อ event.type === 'postback'
+async function handlePostback(event) {
+  const data = String(event.postback?.data || '');
+  const params = parsePostbackData(data);
+
+  // ✅ ถ้าผู้ใช้เลือกช่วงเวลา
+  if (data.startsWith('dash?range=')) {
+    const range = params.range;
+    return lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `กำลังเตรียมแดชบอร์ดช่วงเวลา: ${range}`
+    });
+  }
+
+  // ✅ ถ้าผู้ใช้กดปุ่ม Export Excel
+  if (params.action === 'export_excel') {
+    return lineClient.replyMessage(event.replyToken, {
+      type: 'text',
+      text: 'กำลังสร้างไฟล์ Excel ให้ครับ...'
+    });
+  }
+}
+// ============================ END FLEX DASHBOARD POSTBACK ============================
+
 
 // 🚀 เริ่มรันเซิร์ฟเวอร์บนพอร์ตที่กำหนด (Railway จะใช้ PORT อัตโนมัติ)
 const port = process.env.PORT || 3000;
