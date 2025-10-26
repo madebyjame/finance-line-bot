@@ -420,9 +420,39 @@ function buildDashboardMenuFlex() {
 
 
 
+// Helper functions for dashboard
+function parseThaiDate(thaiDate) {
+  try {
+    const [d, m, y] = thaiDate.split('/').map(Number);
+    return new Date(y - 543, m - 1, d);
+  } catch (e) {
+    return null;
+  }
+}
+
+function isSameMonth(d1, d2) {
+  return d1.getFullYear() === d2.getFullYear() && 
+         d1.getMonth() === d2.getMonth();
+}
+
+function normalizeCategory(cat) {
+  return (cat || 'อื่นๆ').trim();
+}
+
+function buildQuickChartUrl(config, opts = {}) {
+  const { w = 600, h = 400 } = opts;
+  const url = 'https://quickchart.io/chart';
+  const params = new URLSearchParams({
+    c: JSON.stringify(config),
+    w: String(w),
+    h: String(h)
+  });
+  return `${url}?${params.toString()}`;
+}
+
 // 🧠 ส่วนหลักที่ใช้ตอบกลับข้อความผู้ใช้
 async function buildDashboardImages(userId) {
-  const rows = await readRecentRowsForUser(userId, 500);
+  const rows = await readRecentRows(120);
   if (rows.length === 0) return null;
 
   const now = new Date();
@@ -511,14 +541,15 @@ async function handleEvent(event) {
     }
   }
 
-  // ถ้าผู้ใช้พิมพ์ "แดชบอร์ด" ให้เรียกเมนู Flex ที่สร้างไว้
-  if (/^แดชบอร์ด$/i.test(text)) {
-  const flex = buildDashboardMenuFlex();
-  return lineClient.replyMessage(event.replyToken, flex);
-  }
-
   // ข้อความธรรมดา
   if (event.type !== 'message' || event.message.type !== 'text') return;
+  const text = event.message.text.trim();
+
+  // ถ้าผู้ใช้พิมพ์ "แดชบอร์ด" ให้เรียกเมนู Flex ที่สร้างไว้
+  if (/^แดชบอร์ด$/i.test(text)) {
+    const flex = buildDashboardMenuFlex();
+    return lineClient.replyMessage(event.replyToken, flex);
+  }
   const text = event.message.text.trim();
   const today = todayTH();
 
@@ -567,17 +598,17 @@ async function handleEvent(event) {
   }
 
   if (/^แดชบอร์ด$/i.test(text)) {
-  const dash = await buildDashboardImages(userId);
-  if (!dash) {
-    return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ยังไม่มีข้อมูลครับ' });
+    const dash = await buildDashboardImages(event.source?.userId);
+    if (!dash) {
+      return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ยังไม่มีข้อมูลครับ' });
+    }
+    if (dash.note) {
+      return lineClient.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `${dash.note}\n\n${dash.barUrl}\n${dash.pieUrl}`
+      });
+    }
   }
-  if (dash.note) {
-    return lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: `${dash.note}\n\n${dash.barUrl}\n${dash.pieUrl}`
-    });
-  }
-}
 
 
   // เมนูช่วยเหลือ
