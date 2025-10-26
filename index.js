@@ -1,15 +1,27 @@
+/**
+ * LINE Bot สำหรับบันทึกรายรับ-รายจ่าย อัตโนมัติลงใน Google Sheets
+ * Features:
+ * - บันทึกรายรับ/รายจ่ายจากข้อความแชท (เช่น "กาแฟ 60", "เงินเดือน 30000")
+ * - วิเคราะห์ค่าใช้จ่ายด้วย Gemini AI
+ * - แสดงแดชบอร์ดสรุปและกราฟวิเคราะห์
+ * - ส่งออกข้อมูลเป็น Excel ได้
+ */
+
 const fs = require("fs");
+// สร้าง Google Service Account credentials เป็นไฟล์ชั่วคราว (สำหรับ Railway)
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
   const path = "/tmp/google.json";
   fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
   process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
 }
 
+// โหลดค่า environment variables จากไฟล์ .env
 require('dotenv').config();
-const express = require('express');
-const { Client, middleware } = require('@line/bot-sdk');
-const { google } = require('googleapis');
-const axios = require('axios');
+// โหลด dependencies หลัก
+const express = require('express');          // เว็บเซิร์ฟเวอร์
+const { Client, middleware } = require('@line/bot-sdk');  // LINE Bot SDK
+const { google } = require('googleapis');    // Google Sheets API
+const axios = require('axios');              // HTTP client สำหรับเรียก APIs
 
 const app = express();
 
@@ -85,11 +97,15 @@ function todayTH() {
 }
 
 // -------- Classifier: Type & Category (TH) --------
+// 🔍 คำสำคัญสำหรับระบบเดาอัตโนมัติว่าเป็นรายรับหรือรายจ่าย
+// ใช้ตอนผู้ใช้พิมพ์แบบสั้น เช่น "กาแฟ 60" (รายจ่าย) หรือ "ได้เงิน 500" (รายรับ)
 const KW = {
   income: [ 'รายรับ','รับ','ได้','โอนเข้า','เงินเดือน','โบนัส','ทิป','ขายได้','ดอกเบี้ย','ปันผล' ],
   expense: [ 'รายจ่าย','จ่าย','ซื้อ','โอนออก','เติม','ค่าผ่อน','ผ่อน','ค่าสมาชิก','ค่าใช้จ่าย' ],
 };
 
+// 📂 หมวดหมู่รายจ่าย พร้อมคำสำคัญสำหรับระบบเดาอัตโนมัติ
+// เมื่อผู้ใช้พิมพ์ "กาแฟ 60" ระบบจะเดาว่าเป็นหมวด "อาหาร/กาแฟ" เป็นต้น
 const CATS_EXPENSE = [
   { name: 'อาหาร/กาแฟ', kws: ['ข้าว','อาหาร','ข้าวเที่ยง','ข้าวเย็น','ของกิน','กาแฟ','คาเฟ่','ชานม','ของหวาน','ส้มตำ','ก๋วยเตี๋ยว','หมูกระทะ'] },
   { name: 'เดินทาง', kws: ['รถ','น้ำมัน','เติมน้ำมัน','มอเตอร์ไซค์','แท็กซี่','แกร็บ','บีทีเอส','mrt','ตั๋ว','ค่าทางด่วน','ที่จอด'] },
@@ -107,8 +123,15 @@ const CATS_INCOME = [
   { name: 'การเงิน/ลงทุน', kws: ['ดอกเบี้ย','ปันผล','หุ้น','คริปโต'] }
 ];
 
+// 🛠️ Utility functions สำหรับประมวลผลข้อความ
+
+// แปลงข้อความเป็นตัวพิมพ์เล็ก และจัดการกรณี null/undefined
 function normalize(s) { return String(s || '').toLowerCase(); }
 
+// แยกจำนวนเงินออกจากข้อความ รองรับรูปแบบต่างๆ เช่น
+// - "1234" -> 1234
+// - "1,234.56" -> 1234.56
+// - "1 234.5" -> 1234.50
 function extractAmount(text) {
   const m = String(text).match(/(\d{1,3}(?:[, ]\d{3})*|\d+)(?:[.,](\d{1,2}))?/);
   if (!m) return null;
@@ -118,6 +141,9 @@ function extractAmount(text) {
   return Number.isFinite(val) ? val : null;
 }
 
+// 🤖 ระบบเดาอัตโนมัติว่าเป็นรายรับหรือรายจ่าย
+// ใช้คำสำคัญจาก KW.income และ KW.expense ในการเดา
+// ถ้าไม่ชัดเจน จะเดาว่าเป็นรายจ่าย (default)
 function detectType(text) {
   const t = normalize(text);
   const isIncome = KW.income.some(k => t.includes(k.toLowerCase()));
@@ -128,6 +154,9 @@ function detectType(text) {
   return 'รายจ่าย';
 }
 
+// 🏷️ ระบบเดาหมวดหมู่อัตโนมัติจากคำในข้อความ
+// ใช้คำสำคัญจาก CATS_INCOME และ CATS_EXPENSE
+// ถ้าไม่ตรงกับหมวดไหนเลย จะเป็น "อื่นๆ"
 function detectCategory(text, type) {
   const t = normalize(text);
   const list = type === 'รายรับ' ? CATS_INCOME : CATS_EXPENSE;
@@ -220,7 +249,9 @@ ${lines}
   return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
 }
 
-// -------- Flex UI Builders --------
+// 🎨 ส่วนสร้าง UI ด้วย Flex Message
+// สร้างป้ายชิป (chip) แสดงประเภทและหมวดหมู่
+// เช่น [รายจ่าย] [อาหาร/กาแฟ]
 function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   return {
     type: 'box', layout: 'baseline', backgroundColor: bg, cornerRadius: '12px', paddingAll: '6px',
@@ -228,6 +259,9 @@ function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   };
 }
 
+// 🎯 สร้างหน้ายืนยันการบันทึกด้วย Flex Message
+// แสดงรายละเอียดการบันทึก พร้อมปุ่มยืนยัน/ยกเลิก
+// UI จะปรับเปลี่ยนตามประเภท (รายรับ/รายจ่าย)
 function confirmFlex({ type, amount, category, note, date, payload }) {
   const isIncome = type === 'รายรับ';
   const title = isIncome ? 'บันทึกรายรับ?' : 'บันทึกรายจ่าย?';
@@ -243,7 +277,6 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
       header: {
         type: 'box', layout: 'horizontal', contents: [
           { type: 'text', text: icon + ' ' + title, weight: 'bold', size: 'md', color: THEME.textStrong },
-          { type: 'button', action: { type: 'postback', label: '✖', data: 'action=cancel', displayText: 'ยกเลิก' }, style: 'secondary', color: THEME.danger, height: 'sm' }
         ], justifyContent: 'space-between'
       },
       body: {
@@ -264,6 +297,9 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
   };
 }
 
+// 🔄 สร้าง payload สำหรับส่งข้อมูลกลับมาเมื่อกดปุ่มบันทึก
+// แปลงข้อมูลเป็น URL encoded string เพื่อส่งผ่าน LINE postback
+// จำกัดความยาว note ไม่เกิน 40 ตัวอักษร
 function buildSavePayload({ type, amount, category, note }) {
   const shortNote = String(note || '').slice(0, 40);
   const params = new URLSearchParams({ action: 'save', type, amount: String(amount), category, note: shortNote });
