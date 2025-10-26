@@ -1,58 +1,48 @@
 const fs = require("fs");
-// ✅ ถ้ามีข้อมูล GOOGLE_CREDENTIALS_JSON จาก Railway จะเขียนเป็นไฟล์ชั่วคราว เพื่อให้ Google ใช้ตรวจสิทธิ์
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
-const path = "/tmp/google.json"; // ที่อยู่ไฟล์ชั่วคราวในเซิร์ฟเวอร์
-fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
-process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path; // ตั้งค่าให้ Google ใช้ไฟล์นี้
+  const path = "/tmp/google.json";
+  fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
+  process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
 }
 
-
-// ✅ โหลดค่าตัวแปรจากไฟล์ .env เช่น Channel Token, Sheet ID, API Key
 require('dotenv').config();
+const express = require('express');
+const { Client, middleware } = require('@line/bot-sdk');
+const { google } = require('googleapis');
+const axios = require('axios');
 
-// ✅ โหลดโมดูลที่ต้องใช้
-const express = require('express'); // สร้างเว็บเซิร์ฟเวอร์
-const { Client, middleware } = require('@line/bot-sdk'); // เชื่อมต่อกับ LINE Messaging API
-const { google } = require('googleapis'); // เชื่อมต่อ Google Sheets
-const axios = require('axios'); // เรียก API ภายนอก
-
-// ✅ สร้างแอป Express
 const app = express();
 
-// ✅ ตั้งค่าการเชื่อมต่อกับ LINE จากค่าใน Railway (.env)
 const lineConfig = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.CHANNEL_SECRET
 };
 const lineClient = new Client(lineConfig);
 
-// 🎨 THEME: สีและสไตล์ UI สำหรับ Flex Message (โทนมินิมอล)
+// ===== THEME (Modern UI) =====
 const THEME = {
-accent: '#4F46E5', // สีหลัก (ม่วง)
-accentSoft: '#EEF2FF', // สีพื้นอ่อน
-danger: '#EF4444', // สีแดงแจ้งเตือน
-textMuted: '#8B95A1', // สีข้อความจาง
-textStrong: '#111827', // สีข้อความเข้ม
+  accent: '#4F46E5',       // indigo-600
+  accentSoft: '#EEF2FF',   // indigo-50
+  danger: '#EF4444',       // red-500
+  textMuted: '#8B95A1',
+  textStrong: '#111827',
 };
 
-// 📊 เชื่อมกับ Google Sheets ด้วยบัญชี Service Account
+// -------- Google Sheets --------
 const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE, //ใช้ไฟล์คีย์ที่สร้างไว้ข้างบน
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'] // สิทธิ์เข้าถึงชีต
+  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
+  scopes: ['https://www.googleapis.com/auth/spreadsheets']
 });
 const sheets = google.sheets({ version: 'v4', auth });
 
-// 🗂️ กำหนด ID ของชีต และช่วงข้อมูล (เช่น A:E)
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const SHEET_RANGE = process.env.SHEET_RANGE || 'Sheet1!A:E';
 
-// ✅ ฟังก์ชันช่วยตรวจหัวตาราง ถ้าไม่มีจะสร้างให้
 function headRangeFrom(range) {
   const sheetTitle = (range.includes('!') ? range.split('!')[0] : 'Sheet1');
   return `${sheetTitle}!A1:E1`;
 }
 
-// 🧾 ตรวจว่ามีหัวตารางหรือยัง ถ้ายังไม่มีให้เพิ่ม
 async function ensureHeader() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -69,7 +59,6 @@ async function ensureHeader() {
   }
 }
 
-// ➕ เพิ่มข้อมูล 1 แถวในชีต (เช่น บันทึกรายรับ/รายจ่าย)
 async function appendRow(values) {
   await ensureHeader();
   return sheets.spreadsheets.values.append({
@@ -80,7 +69,6 @@ async function appendRow(values) {
   });
 }
 
-// 📖 อ่านข้อมูลจากชีต (เอาเฉพาะล่าสุด)
 async function readRecentRows(limit = 120) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
@@ -91,18 +79,17 @@ async function readRecentRows(limit = 120) {
   return dataRows.slice(-limit);
 }
 
-// 📅 ฟังก์ชันวันที่ภาษาไทย
+// -------- Helpers: Date / Format --------
 function todayTH() {
   return new Date().toLocaleDateString('th-TH');
 }
 
-// 🔍 กำหนดคำที่ใช้จำแนกรายรับรายจ่าย
+// -------- Classifier: Type & Category (TH) --------
 const KW = {
   income: [ 'รายรับ','รับ','ได้','โอนเข้า','เงินเดือน','โบนัส','ทิป','ขายได้','ดอกเบี้ย','ปันผล' ],
   expense: [ 'รายจ่าย','จ่าย','ซื้อ','โอนออก','เติม','ค่าผ่อน','ผ่อน','ค่าสมาชิก','ค่าใช้จ่าย' ],
 };
 
-// 📂 หมวดหมู่หลักของรายจ่ายและรายรับ (ใช้เดาอัตโนมัติ)
 const CATS_EXPENSE = [
   { name: 'อาหาร/กาแฟ', kws: ['ข้าว','อาหาร','ข้าวเที่ยง','ข้าวเย็น','ของกิน','กาแฟ','คาเฟ่','ชานม','ของหวาน','ส้มตำ','ก๋วยเตี๋ยว','หมูกระทะ'] },
   { name: 'เดินทาง', kws: ['รถ','น้ำมัน','เติมน้ำมัน','มอเตอร์ไซค์','แท็กซี่','แกร็บ','บีทีเอส','mrt','ตั๋ว','ค่าทางด่วน','ที่จอด'] },
@@ -120,7 +107,6 @@ const CATS_INCOME = [
   { name: 'การเงิน/ลงทุน', kws: ['ดอกเบี้ย','ปันผล','หุ้น','คริปโต'] }
 ];
 
-// 🧮 ฟังก์ชันช่วยประมวลผลข้อความ
 function normalize(s) { return String(s || '').toLowerCase(); }
 
 function extractAmount(text) {
@@ -195,7 +181,6 @@ async function callGeminiModel({ model, apiKey, prompt }) {
   throw lastErr;
 }
 
-// 🤖 ฟังก์ชันวิเคราะห์ด้วย Gemini (AI)
 async function analyzeWithGemini() {
   const rows = await readRecentRows(120);
   if (rows.length === 0) {
@@ -235,15 +220,15 @@ ${lines}
   return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ หรือตั้ง GEMINI_MODEL เป็น models/gemini-2.0-flash-lite-001';
 }
 
-// 🎨 Flex Message: UI สวย ๆ ให้ผู้ใช้กดยืนยัน
-function chip(text, bg = THEME.accentSoft, color = THEME.accent) { /* ... สร้างกล่องแสดงป้ายหมวด ... */
+// -------- Flex UI Builders --------
+function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   return {
     type: 'box', layout: 'baseline', backgroundColor: bg, cornerRadius: '12px', paddingAll: '6px',
     contents: [{ type: 'text', text, size: '12px', weight: 'bold', color }]
   };
 }
 
-function confirmFlex({ type, amount, category, note, date, payload }) { /* ... หน้ายืนยันก่อนบันทึก ... */
+function confirmFlex({ type, amount, category, note, date, payload }) {
   const isIncome = type === 'รายรับ';
   const title = isIncome ? 'บันทึกรายรับ?' : 'บันทึกรายจ่าย?';
   const icon = isIncome ? '💸' : '🧾';
@@ -279,21 +264,20 @@ function confirmFlex({ type, amount, category, note, date, payload }) { /* ... �
   };
 }
 
-function buildSavePayload({ type, amount, category, note }) { /* ... แปลงข้อมูลเป็น URL สำหรับ postback ... */
+function buildSavePayload({ type, amount, category, note }) {
   const shortNote = String(note || '').slice(0, 40);
   const params = new URLSearchParams({ action: 'save', type, amount: String(amount), category, note: shortNote });
   return params.toString();
 }
 
-// 🌐 เส้นทางหลักของเว็บเซิร์ฟเวอร์ (Route)
-app.get('/webhook', (req, res) => { // ตรวจสุขภาพ
+// -------- Routes --------
+app.get('/webhook', (req, res) => {
   res.status(200).send('OK');
 });
 
-// 📨 LINE จะยิงมาที่นี่เมื่อมีข้อความหรือปุ่มกดจากผู้ใช้
 app.post('/webhook', middleware(lineConfig), (req, res) => {
   try {
-    res.sendStatus(200); // ตอบกลับทันทีเพื่อไม่ให้ Timeout
+    res.sendStatus(200);
     const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
     const events = Array.isArray(body.events) ? body.events : [];
     Promise.all(events.map(e => handleEvent(e))).catch(err => {
@@ -304,7 +288,6 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
   }
 });
 
-// ✅ หน้าแรก แสดงข้อความเวลาบอทออนไลน์แล้ว
 app.get('/', (req, res) => {
   res.send('Bot พร้อมทำงาน');
 });
@@ -336,178 +319,6 @@ app.get('/debug/models', async (req, res) => {
   }
   return res.status(503).json({ error: 'The service is currently unavailable (after retries).' });
 });
-
-// ============================ FLEX DASHBOARD MENU ============================
-// ฟังก์ชันนี้สร้าง Flex Message เมนูแดชบอร์ดมินิมอล
-// มีปุ่มเลือกช่วงเวลา: 1 year / 6 เดือน / 3 เดือน / 1 เดือน / 1 week
-// และปุ่ม Export Excel สีเขียวเด่น
-function buildDashboardMenuFlex() {
-  const GREEN = '#16A34A'; // สีเขียวเด่นสำหรับปุ่ม Export
-  const TEXT = '#111111'; // สีข้อความหลัก
-  const MUTED = '#8B95A1'; // สีข้อความรอง
-
-  return {
-    type: 'flex',
-    altText: 'แดชบอร์ดการเงิน',
-    contents: {
-      type: 'bubble',
-      size: 'kilo',
-      header: {
-        type: 'box',
-        layout: 'vertical',
-        paddingAll: '16px',
-        contents: [
-          { type: 'text', text: 'แดชบอร์ดการเงิน', weight: 'bold', size: 'lg', color: TEXT },
-          { type: 'text', text: 'เลือกช่วงเวลาที่ต้องการดูสรุป', size: 'xs', color: MUTED, margin: 'sm' }
-        ]
-      },
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: '12px',
-        paddingAll: '16px',
-        contents: [
-          {
-            type: 'box',
-            layout: 'horizontal',
-            spacing: '8px',
-            contents: [
-              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 year', data: 'dash?range=1y' } },
-              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '6 เดือน', data: 'dash?range=6m' } }
-            ]
-          },
-          {
-            type: 'box',
-            layout: 'horizontal',
-            spacing: '8px',
-            contents: [
-              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '3 เดือน', data: 'dash?range=3m' } },
-              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 เดือน', data: 'dash?range=1m' } }
-            ]
-          },
-          {
-            type: 'box',
-            layout: 'horizontal',
-            contents: [
-              { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 week', data: 'dash?range=1w' } }
-            ]
-          }
-        ]
-      },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        paddingAll: '16px',
-        contents: [
-          {
-            type: 'button',
-            style: 'primary',
-            height: 'sm',
-            color: GREEN,
-            action: { type: 'postback', label: 'Export เป็น Excel', data: 'dash?action=export_excel' }
-          }
-        ]
-      },
-      styles: {
-        header: { backgroundColor: '#FFFFFF' },
-        body:   { backgroundColor: '#FFFFFF' },
-        footer: { backgroundColor: '#FFFFFF' }
-      }
-    }
-  };
-}
-// ============================ END FLEX DASHBOARD MENU ============================
-
-
-
-// Helper functions for dashboard
-function parseThaiDate(thaiDate) {
-  try {
-    const [d, m, y] = thaiDate.split('/').map(Number);
-    return new Date(y - 543, m - 1, d);
-  } catch (e) {
-    return null;
-  }
-}
-
-function isSameMonth(d1, d2) {
-  return d1.getFullYear() === d2.getFullYear() && 
-         d1.getMonth() === d2.getMonth();
-}
-
-function normalizeCategory(cat) {
-  return (cat || 'อื่นๆ').trim();
-}
-
-function buildQuickChartUrl(config, opts = {}) {
-  const { w = 600, h = 400 } = opts;
-  const url = 'https://quickchart.io/chart';
-  const params = new URLSearchParams({
-    c: JSON.stringify(config),
-    w: String(w),
-    h: String(h)
-  });
-  return `${url}?${params.toString()}`;
-}
-
-// 🧠 ส่วนหลักที่ใช้ตอบกลับข้อความผู้ใช้
-async function buildDashboardImages(userId) {
-  const rows = await readRecentRows(120);
-  if (rows.length === 0) return null;
-
-  const now = new Date();
-  const thisMonthRows = rows.filter(r => {
-    const d = parseThaiDate(r[0]);
-    return d && isSameMonth(d, now);
-  });
-  if (thisMonthRows.length === 0)
-    return { note: 'เดือนนี้ยังไม่มีรายการเลยครับ ลองบันทึกเพิ่มก่อนนะ' };
-
-  let sumIncome = 0;
-  let sumExpense = 0;
-  const catExpense = {};
-  for (const r of thisMonthRows) {
-    const type = r[1];
-    const amount = Number(r[2] || 0);
-    const cat = normalizeCategory(r[3]);
-    if (type === 'รายรับ') sumIncome += amount;
-    else if (type === 'รายจ่าย') {
-      sumExpense += amount;
-      catExpense[cat] = (catExpense[cat] || 0) + amount;
-    }
-  }
-  const balance = sumIncome - sumExpense;
-
-  // ---------- Chart ----------
-  const barConfig = {
-    type: 'bar',
-    data: {
-      labels: ['เดือนนี้'],
-      datasets: [
-        { label: 'รายรับ', data: [sumIncome], backgroundColor: '#4CAF50' },
-        { label: 'รายจ่าย', data: [sumExpense], backgroundColor: '#F44336' }
-      ]
-    }
-  };
-
-  const pieConfig = {
-    type: 'pie',
-    data: {
-      labels: Object.keys(catExpense),
-      datasets: [{ data: Object.values(catExpense) }]
-    }
-  };
-
-  const barUrl = buildQuickChartUrl(barConfig);
-  const pieUrl = buildQuickChartUrl(pieConfig, { w: 600, h: 600 });
-
-  return {
-    note: `รายรับรวม: ${sumIncome.toLocaleString()} บาท\nรายจ่ายรวม: ${sumExpense.toLocaleString()} บาท\nคงเหลือ: ${balance.toLocaleString()} บาท`,
-    barUrl,
-    pieUrl
-  };
-}
-
 
 // -------- LINE Handler --------
 async function handleEvent(event) {
@@ -543,13 +354,6 @@ async function handleEvent(event) {
 
   // ข้อความธรรมดา
   if (event.type !== 'message' || event.message.type !== 'text') return;
-  const text = event.message.text.trim();
-
-  // ถ้าผู้ใช้พิมพ์ "แดชบอร์ด" ให้เรียกเมนู Flex ที่สร้างไว้
-  if (/^แดชบอร์ด$/i.test(text)) {
-    const flex = buildDashboardMenuFlex();
-    return lineClient.replyMessage(event.replyToken, flex);
-  }
   const text = event.message.text.trim();
   const today = todayTH();
 
@@ -597,20 +401,6 @@ async function handleEvent(event) {
     }
   }
 
-  if (/^แดชบอร์ด$/i.test(text)) {
-    const dash = await buildDashboardImages(event.source?.userId);
-    if (!dash) {
-      return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ยังไม่มีข้อมูลครับ' });
-    }
-    if (dash.note) {
-      return lineClient.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `${dash.note}\n\n${dash.barUrl}\n${dash.pieUrl}`
-      });
-    }
-  }
-
-
   // เมนูช่วยเหลือ
   const help = [
     'พิมพ์เร็ว ๆ ได้แบบนี้:',
@@ -623,44 +413,6 @@ async function handleEvent(event) {
   return lineClient.replyMessage(event.replyToken, { type: 'text', text: help });
 }
 
-// ============================ FLEX DASHBOARD POSTBACK ============================
-// ฟังก์ชันนี้ทำงานเมื่อผู้ใช้กดปุ่มใน Flex Message
-function parsePostbackData(data) {
-  const params = {};
-  const [, qs] = String(data).split('?');
-  if (qs) qs.split('&').forEach(kv => {
-    const [k, v] = kv.split('=');
-    params[k] = v;
-  });
-  return params;
-}
-
-// ใช้ใน handleEvent(event) เมื่อ event.type === 'postback'
-async function handlePostback(event) {
-  const data = String(event.postback?.data || '');
-  const params = parsePostbackData(data);
-
-  // ✅ ถ้าผู้ใช้เลือกช่วงเวลา
-  if (data.startsWith('dash?range=')) {
-    const range = params.range;
-    return lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: `กำลังเตรียมแดชบอร์ดช่วงเวลา: ${range}`
-    });
-  }
-
-  // ✅ ถ้าผู้ใช้กดปุ่ม Export Excel
-  if (params.action === 'export_excel') {
-    return lineClient.replyMessage(event.replyToken, {
-      type: 'text',
-      text: 'กำลังสร้างไฟล์ Excel ให้ครับ...'
-    });
-  }
-}
-// ============================ END FLEX DASHBOARD POSTBACK ============================
-
-
-// 🚀 เริ่มรันเซิร์ฟเวอร์บนพอร์ตที่กำหนด (Railway จะใช้ PORT อัตโนมัติ)
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
