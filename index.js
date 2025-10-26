@@ -164,6 +164,69 @@ async function buildMonthlyFactsForUser(userId, months = 2) {
   return { monthsData, keys };
 }
 
+// ========= MONTHLY ANALYSIS WITH GEMINI (FIX: monthsCount) =========
+async function analyzeMonthlyWithGeminiForUser(userId, months = 2) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
+
+  // ป้องกันกรณี months ไม่ใช่ตัวเลข / ไม่ส่งมา → ใช้ 2
+  const monthsCount = Number(months) > 0 ? Number(months) : 2;
+
+  // ดึงเฉพาะ N เดือนล่าสุด (เช่น 2 = เดือนนี้ + เดือนก่อน)
+  const { monthsData, keys } = await buildMonthlyFactsForUser(userId, monthsCount);
+  if (!monthsData.length) return 'ยังไม่มีข้อมูลของคุณในช่วงเดือนล่าสุดครับ';
+
+  // เตรียมตารางย่อสำหรับ prompt
+  const tableLines = monthsData.map(m => {
+    const cats = m.topCats.map(c => `${c.category}:${Math.round(c.sum).toLocaleString()}บ`).join(', ') || '-';
+    return `${m.key} | รายรับ:${m.income.toLocaleString()}บ | รายจ่าย:${m.expense.toLocaleString()}บ | คงเหลือ:${m.balance.toLocaleString()}บ | หมวดหลัก: ${cats}`;
+  }).join('\n');
+
+  // ถ้ามี 2 เดือนขึ้นไป ทำ diff เดือนล่าสุดเทียบเดือนก่อน
+  let mom = 'ข้อมูลเดือนเดียว';
+  if (monthsData.length >= 2) {
+    const last = monthsData[monthsData.length - 1];
+    const prev = monthsData[monthsData.length - 2];
+    const dInc = last.income - prev.income;
+    const dExp = last.expense - prev.expense;
+    const dBal = last.balance - prev.balance;
+    mom = `เทียบ ${last.key} กับ ${prev.key}: รายรับ ${dInc>=0?'+':''}${dInc.toLocaleString()}บ, รายจ่าย ${dExp>=0?'+':''}${dExp.toLocaleString()}บ, คงเหลือ ${dBal>=0?'+':''}${dBal.toLocaleString()}บ`;
+  }
+
+  const prompt = `
+คุณเป็นผู้จัดการการเงินส่วนบุคคล ทำสรุปรายเดือนจากตารางด้านล่าง
+ให้สรุปเฉพาะ "รายเดือน" เน้นความจริงตามตัวเลข และแนะนำแบบทำได้จริง
+ห้ามใส่สัญลักษณ์ Markdown เช่น **, __, *, _, • ให้ตอบเป็นข้อความธรรมดาเท่านั้น
+
+= ตารางสรุปรายเดือน (ล่าสุด ${monthsCount} เดือน) =
+${tableLines}
+
+= สรุปเทียบเดือนต่อเดือน (MoM) =
+${mom}
+
+= งานที่ต้องตอบ =
+1) สรุปสั้น ๆ ว่าเดือนล่าสุด รายรับ-รายจ่าย-คงเหลือ เท่าไหร่ (ระบุเดือน)
+2) ระบุหมวดใช้เงินสูงสุดของเดือนล่าสุด (ระบุจำนวนโดยประมาณ)
+3) เปรียบเทียบกับเดือนก่อน: ใช้มากขึ้น/น้อยลงด้านไหนบ้าง
+4) ให้คำแนะนำ 2-3 ข้อที่ทำได้จริงในเดือนถัดไป (เช่น ตั้งเพดานหมวด, เปลี่ยนความถี่, ย้ายค่าใช้จ่ายคงที่)
+5) ถ้าโดยรวมปกติดี ให้บอกว่า "ภาพรวมปกติ" ชัดเจน
+
+ตอบเป็นภาษาไทยแบบอ่านง่าย ใช้ย่อหน้าและขีดกลาง (-) ธรรมดาแยกบรรทัด ไม่ใช้ตัวหนาหรือสัญลักษณ์พิเศษ
+`.trim();
+
+  for (const model of MODEL_LIST) {
+    try {
+      const text = await callGeminiModel({ model, apiKey, prompt });
+      return text;
+    } catch (e) {
+      const status = e?.response?.status;
+      if ([404,429,500,502,503,504].includes(status)) continue;
+      return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
+    }
+  }
+  return 'Gemini ช้า/ล่มชั่วคราว ลองใหม่อีกครั้งครับ';
+}
+
 // ============================ END PER-USER SHEET HELPERS ============================
 
 // แปลงวันที่ไทย → YYYY-MM (คีย์รายเดือน)
@@ -505,6 +568,7 @@ ${lines}
 
 // วิเคราะห์เฉพาะของผู้ใช้ (เวอร์ชัน per-user)
 // วิเคราะห์เฉพาะของผู้ใช้ (แฟกต์เบส + กติกา)
+// วิเคราะห์เฉพาะของผู้ใช้ (แฟกต์เบส + กติกา)
 async function analyzeWithGeminiForUser(userId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
@@ -518,24 +582,36 @@ async function analyzeWithGeminiForUser(userId) {
   const safeCats = rules.ESSENTIAL_CATEGORIES;
 
   const prompt = `
-คุณเป็นผู้จัดการการเงินส่วนบุคคล ทำสรุปรายเดือนจากตารางด้านล่าง
-ให้สรุปเฉพาะ "รายเดือน" เน้นความจริงตามตัวเลข และแนะนำแบบทำได้จริง
-ห้ามใส่สัญลักษณ์ Markdown เช่น **, __, *, _, • ให้ตอบเป็นข้อความธรรมดาเท่านั้น
+คุณเป็นผู้จัดการการเงินส่วนบุคคล (Personal Finance Manager) หน้าที่คุณคือสรุปจาก "ข้อเท็จจริง" ที่ให้เท่านั้น
+ห้ามเดา/ห้ามกุข้อมูลใหม่ และห้ามแนะนำให้ลดรายจ่ายเล็กน้อยที่ต่ำกว่า ${rules.MIN_SINGLE_IGNORE} บาท เว้นแต่รวมหมวดนั้น > ${rules.MIN_MONTHLY_CATEGORY_SUM} บาท/เดือน
+ให้ความสำคัญกับหมวดที่กินสัดส่วนรายจ่าย > ${(rules.CATEGORY_SHARE_ALERT*100).toFixed(0)}% หรือโผล่สูงกว่า median/เฉลี่ยมาก
 
-= ตารางสรุปรายเดือน (ล่าสุด ${months} เดือน) =
-${tableLines}
+= ข้อเท็จจริง=
+- รวมรายรับล่าสุด (ช่วง ${facts.monthsAnalyzed} เดือน): ${facts.totalIncome.toLocaleString()} บาท
+- รวมรายจ่ายล่าสุด: ${facts.totalExpense.toLocaleString()} บาท
+- คงเหลือ: ${(facts.balance).toLocaleString()} บาท
+- ค่ากลางรายจ่ายเดี่ยว (median): ${Math.round(facts.medianSingleExpense).toLocaleString()} บาท
+- ค่ากลางเฉลี่ย (mean): ${Math.round(facts.meanSingleExpense).toLocaleString()} บาท
+- หมวดที่น่าพิจารณา (ตามเกณฑ์): ${facts.interestingCats.map(c => `${c.category} ${Math.round(c.sum).toLocaleString()}บ (${Math.round(c.share*100)}%)`).join(', ') || '—'}
+- รายการเดี่ยวที่ดูสูงผิดปกติ (top): ${facts.outliers.map(o => `${o.date}:${o.category} ${Math.round(o.amount).toLocaleString()}บ`).join(', ') || '—'}
+- เทียบเดือนล่าสุดกับก่อนหน้า: ${
+    facts.monthOverMonth
+      ? `รายรับ ${facts.monthOverMonth.last.key} ${facts.monthOverMonth.last.income.toLocaleString()}บ (Δ ${facts.monthOverMonth.diff.income>=0?'+':''}${facts.monthOverMonth.diff.income.toLocaleString()}บ), ` +
+        `รายจ่าย ${facts.monthOverMonth.last.key} ${facts.monthOverMonth.last.expense.toLocaleString()}บ (Δ ${facts.monthOverMonth.diff.expense>=0?'+':''}${facts.monthOverMonth.diff.expense.toLocaleString()}บ)`
+      : 'ข้อมูลไม่พอ'
+  }
 
-= สรุปเทียบเดือนต่อเดือน (MoM) =
-${mom}
+= ตารางดิบ (เพื่ออ้างอิงเท่านั้น ไม่ต้องคัดลอกทั้งหมดในการตอบ)=
+วันที่ | ประเภท | จำนวน | หมวด
+${text}
 
-= งานที่ต้องตอบ =
-1) สรุปสั้น ๆ ว่าเดือนล่าสุด รายรับ-รายจ่าย-คงเหลือ เท่าไหร่ (ระบุเดือน)
-2) ระบุหมวดใช้เงินสูงสุดของเดือนล่าสุด (ระบุจำนวนโดยประมาณ)
-3) เปรียบเทียบกับเดือนก่อน: ใช้มากขึ้น/น้อยลงด้านไหนบ้าง
-4) ให้คำแนะนำ 2-3 ข้อที่ทำได้จริงในเดือนถัดไป (เช่น ตั้งเพดานหมวด, เปลี่ยนความถี่, ย้ายค่าใช้จ่ายคงที่)
-5) ถ้าโดยรวมปกติดี ให้บอกว่า "ภาพรวมปกติ" ชัดเจน
-
-ตอบเป็นภาษาไทยแบบอ่านง่าย ใช้ย่อหน้าและขีดกลาง (-) ธรรมดาแยกบรรทัด ไม่ใช้ตัวหนาหรือสัญลักษณ์พิเศษ
+= กติกาการให้คำแนะนำ =
+1) ข้ามรายการเดี่ยวที่ต่ำกว่า ${rules.MIN_SINGLE_IGNORE} บาท เว้นแต่หมวดนั้นรวมเดือนเกิน ${rules.MIN_MONTHLY_CATEGORY_SUM} บาท
+2) พุ่งเป้าที่หมวดที่ share > ${(rules.CATEGORY_SHARE_ALERT*100).toFixed(0)}% หรือรวมต่อเดือนสูง
+3) สำหรับหมวดจำเป็น (${safeCats.join(', ')}) ให้เสนอ "บริหาร/ต่อรอง/จัดตาราง" แทนการตัดจนเกินจริง
+4) อย่าเสนอให้ลดสิ่งที่ไม่ส่งผลต่อภาพรวม
+5) ถ้า “ไม่มีอะไรน่าลด” ให้พูดตามจริงว่า "ปกติดี"
+6) ตอบเป็นภาษาไทย ลำดับหัวข้อชัดเจน อ่านง่าย (ขีดกลาง - แยกบรรทัด) ห้ามใช้ ** หรือ Markdown ใด ๆ
 `.trim();
 
   for (const model of MODEL_LIST) {
@@ -550,6 +626,7 @@ ${mom}
   }
   return 'Gemini ช้า/ล่มชั่วคราว ลองใหม่อีกครั้งครับ';
 }
+
 
 
 // 🎨 Flex UI
