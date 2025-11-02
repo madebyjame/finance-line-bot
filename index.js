@@ -358,6 +358,7 @@ function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
 }
 
 // ============================ Mobile Modern Dashboard Chart ============================
+// ============================ Modern Mobile Dashboard with In-Chart Labels ============================
 async function buildDashboardImages(userId, rangeCode = '1m') {
   const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
@@ -370,18 +371,19 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const catExpense = {};
   for (const r of inRange) {
     const type = r[1];
-    const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
+    const amt = Number(String(r[2] ?? '0').replace(/,/g, '')) || 0;
     const cat = r[3] || 'อื่นๆ';
     if (type === 'รายรับ') sumIncome += amt;
-    else if (type === 'รายจ่าย') { 
-      sumExpense += amt; 
-      catExpense[cat] = (catExpense[cat] || 0) + amt; 
+    else if (type === 'รายจ่าย') {
+      sumExpense += amt;
+      catExpense[cat] = (catExpense[cat] || 0) + amt;
     }
   }
+
   const balance = sumIncome - sumExpense;
   const pretty = (n) => Number(n).toLocaleString();
 
-  // 🎨 โทนสีและสไตล์
+  // 🎨 โทนสี
   const COLORS = {
     income: '#22C55E',  // เขียวสด
     expense: '#EF4444', // แดงสด
@@ -394,30 +396,15 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const barConfig = {
     type: 'bar',
     data: {
-      labels: ['สรุปรายรับ-รายจ่ายรวม'],
+      labels: ['สรุปรายรับ/รายจ่ายรวม'],
       datasets: [
-        {
-          label: 'รายรับ',
-          data: [sumIncome],
-          backgroundColor: COLORS.income,
-          borderColor: '#15803D',
-          borderWidth: 2,
-        },
-        {
-          label: 'รายจ่าย',
-          data: [sumExpense],
-          backgroundColor: COLORS.expense,
-          borderColor: '#B91C1C',
-          borderWidth: 2,
-        }
+        { label: 'รายรับ', data: [sumIncome], backgroundColor: COLORS.income, borderWidth: 3 },
+        { label: 'รายจ่าย', data: [sumExpense], backgroundColor: COLORS.expense, borderWidth: 3 }
       ]
     },
     options: {
       plugins: {
-        legend: {
-          position: 'bottom',
-          labels: { font: { size: 32 }, color: COLORS.text } // ชื่อ legend ใหญ่ขึ้น
-        },
+        legend: { position: 'bottom', labels: { font: { size: 32 }, color: COLORS.text } },
         datalabels: {
           display: true,
           color: COLORS.text,
@@ -428,22 +415,18 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
         }
       },
       scales: {
-        y: {
-          ticks: { color: COLORS.text, font: { size: 28 } },
-          grid: { color: COLORS.grid }
-        },
-        x: {
-          ticks: { color: COLORS.text, font: { size: 28 } }
-        }
+        y: { ticks: { color: COLORS.text, font: { size: 28 } }, grid: { color: COLORS.grid } },
+        x: { ticks: { color: COLORS.text, font: { size: 28 } } }
       },
       layout: { padding: 30 },
       backgroundColor: COLORS.bg
     }
   };
 
-  // ==================== PIE CHART ====================
+  // ==================== PIE CHART (ชื่อหมวดอยู่ในชิ้น) ====================
   const pieLabels = Object.keys(catExpense);
   const pieData = Object.values(catExpense);
+  const total = pieData.reduce((a, b) => a + b, 0);
   const pieColors = [
     '#60A5FA', '#34D399', '#FBBF24', '#F87171', '#A78BFA',
     '#F472B6', '#FCD34D', '#4ADE80', '#93C5FD', '#C084FC'
@@ -457,35 +440,40 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
         data: pieData.length ? pieData : [1],
         backgroundColor: pieLabels.length ? pieColors.slice(0, pieLabels.length) : ['#E5E7EB'],
         borderColor: '#FFFFFF',
-        borderWidth: 2
+        borderWidth: 3
       }]
     },
     options: {
       plugins: {
-        legend: {
-          position: 'bottom',
-          labels: { font: { size: 28 }, color: COLORS.text } // รายชื่อหมวดหมู่ใหญ่ขึ้น
-        },
+        legend: { display: false }, // 🔕 ซ่อน legend เพื่อให้ชัดในกราฟ
         datalabels: {
           display: true,
-          color: COLORS.text,
-          font: { size: 30, weight: 'bold' },
+          color: '#FFFFFF', // ตัวอักษรสีขาว
+          font: { size: 36, weight: 'bold' },
           formatter: (v, ctx) => {
             const label = ctx.chart.data.labels[ctx.dataIndex];
-            const total = pieData.reduce((a, b) => a + b, 0);
             const percent = total ? Math.round((v / total) * 100) : 0;
             return `${label}\n${percent}%`;
           }
+        },
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const label = context.label || '';
+              const value = context.formattedValue || '';
+              return `${label}: ${value} บาท`;
+            }
+          }
         }
       },
-      layout: { padding: 40 },
+      layout: { padding: 20 },
       backgroundColor: COLORS.bg
     }
   };
 
   // ==================== สร้างภาพ ====================
-  const barUrl = buildQuickChartUrl(barConfig, { w: 900, h: 700 });  // ขนาดพอดีมือถือแนวนอน
-  const pieUrl = buildQuickChartUrl(pieConfig, { w: 800, h: 900 });  // วงกลมใหญ่เต็มจอมือถือ
+  const barUrl = buildQuickChartUrl(barConfig, { w: 900, h: 700 }); // มือถือแนวนอน
+  const pieUrl = buildQuickChartUrl(pieConfig, { w: 900, h: 900 }); // วงกลมใหญ่เต็มจอมือถือ
 
   const note = [
     `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
@@ -496,6 +484,7 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
 
   return { note, barUrl, pieUrl };
 }
+
 
 
 // ============================ END DASHBOARD HELPERS ============================
