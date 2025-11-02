@@ -534,8 +534,14 @@ ${outlierLines}
 // 🎨 Flex UI
 function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
   return {
-    type: 'box', layout: 'baseline', backgroundColor: bg, cornerRadius: '12px', paddingAll: '6px',
-    contents: [{ type: 'text', text, size: '12px', weight: 'bold', color }]
+    type: 'box',
+    layout: 'baseline',
+    backgroundColor: bg,
+    cornerRadius: 'lg',       // เดิม '12px'
+    paddingAll: 'sm',         // เดิม '6px'
+    contents: [
+      { type: 'text', text, size: 'xs', weight: 'bold', color } // เดิม '12px'
+    ]
   };
 }
 
@@ -560,76 +566,125 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
     type: 'flex',
     altText: title,
     contents: {
-      type: 'bubble', size: 'mega', styles: { body: { backgroundColor: '#FFFFFF' } },
+      type: 'bubble',
+      size: 'kilo',
+      styles: {
+        header: { backgroundColor: '#FFFFFF' },
+        body:   { backgroundColor: '#FFFFFF' },
+        footer: { backgroundColor: '#FFFFFF' }
+      },
       header: {
-        type: 'box', layout: 'horizontal', contents: [
-          { type: 'text', text: icon + ' ' + title, weight: 'bold', size: 'md', color: THEME.textStrong },
-        ], justifyContent: 'space-between'
+        type: 'box',
+        layout: 'horizontal',
+        justifyContent: 'flex-start',
+        paddingAll: 'md',
+        contents: [
+          { type: 'text', text: icon + ' ' + title, weight: 'bold', size: 'md', color: THEME.textStrong }
+        ]
       },
       body: {
-        type: 'box', layout: 'vertical', spacing: 'md', contents: [
-          { type: 'text', text: amountTxt, size: 'xxl', weight: 'bold', color: THEME.textStrong },
-          { type: 'text', text: note || '-', size: 'sm', color: THEME.textMuted },
-          { type: 'text', text: date, size: '12px', color: THEME.textMuted },
-          { type: 'box', layout: 'horizontal', spacing: 'sm', contents: chips }
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',          // เดิม 'md' ถูกแล้ว
+        paddingAll: 'md',       // เดิมไม่มี paddingAll → เพิ่มให้สวยขึ้น
+        contents: [
+          { type: 'text', text: amountTxt, size: 'xl', weight: 'bold', color: THEME.textStrong }, // เดิม 'xxl' (ใหญ่ไปในบางจอ)
+          { type: 'text', text: note || '-', size: 'sm', color: THEME.textMuted, wrap: true },
+          { type: 'text', text: date, size: 'xs', color: THEME.textMuted },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            spacing: 'sm',
+            contents: chips
+          }
         ]
       },
       footer: {
-        type: 'box', layout: 'horizontal', spacing: 'md', contents: [
-          { type: 'button', style: 'primary', color: THEME.accent, height: 'sm',
-            action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' } },
-          { type: 'button', style: 'link',
-            action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
+        type: 'box',
+        layout: 'horizontal',
+        spacing: 'md',
+        paddingAll: 'md',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: THEME.accent,
+            height: 'sm',
+            action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' }
+          },
+          {
+            type: 'button',
+            style: 'link',
+            height: 'sm',
+            action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' }
+          }
         ]
       }
     }
   };
 }
 
+
 function buildDashboardMenuFlex() {
   const GREEN = '#16A34A';
   const TEXT = '#111111';
   const MUTED = '#8B95A1';
+
+  // ปุ่มแบ่ง 2 แถว (3 + 2) กันล้นแนวนอนจอเล็ก
+  const row1 = [
+    { type: 'button', style: 'link', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
+    { type: 'button', style: 'link', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } },
+    { type: 'button', style: 'link', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
+  ];
+  const row2 = [
+    { type: 'button', style: 'link', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } },
+    { type: 'button', style: 'link', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } },
+  ];
+
   return {
     type: 'flex',
     altText: 'แดชบอร์ดการเงิน',
     contents: {
       type: 'bubble',
       size: 'kilo',
+      styles: {
+        header: { backgroundColor: '#FFFFFF' },
+        body:   { backgroundColor: '#FFFFFF' },
+        footer: { backgroundColor: '#FFFFFF' }
+      },
       header: {
         type: 'box',
         layout: 'vertical',
-        paddingAll: '16px',
+        paddingAll: 'md',     // เดิม '16px'
         contents: [
           { type: 'text', text: 'แดชบอร์ดการเงิน', weight: 'bold', size: 'lg', color: TEXT },
-          { type: 'text', text: 'เลือกช่วงเวลาที่ต้องการดูสรุป', size: 'xs', color: MUTED, margin: 'sm' }
+          { type: 'text', text: 'เลือกช่วงเวลาที่ต้องการดูสรุป', size: 'xs', color: MUTED, margin: 'sm', wrap: true }
         ]
       },
       body: {
         type: 'box',
         layout: 'vertical',
-        spacing: '12px',
-        paddingAll: '16px',
+        spacing: 'md',        // เดิม '12px'
+        paddingAll: 'md',     // เดิม '16px'
         contents: [
-          { type: 'box', layout: 'horizontal', spacing: '8px', contents: [
-            { type: 'button', style: 'link', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
-            { type: 'button', style: 'link', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } },
-            { type: 'button', style: 'link', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
-            { type: 'button', style: 'link', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } },
-            { type: 'button', style: 'link', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } },
-          ] }
+          { type: 'box', layout: 'horizontal', spacing: 'sm', contents: row1 }, // เดิม spacing '8px'
+          { type: 'box', layout: 'horizontal', spacing: 'sm', contents: row2 }
         ]
       },
       footer: {
         type: 'box',
         layout: 'vertical',
-        paddingAll: '16px',
+        paddingAll: 'md',     // เดิม '16px'
         contents: [
-          { type: 'button', style: 'primary', height: 'sm', color: GREEN,
-            action: { type: 'postback', label: 'Export เป็น Excel', data: 'action=dash&do=export_excel' } }
+          {
+            type: 'button',
+            style: 'primary',
+            height: 'sm',
+            color: GREEN,
+            action: { type: 'postback', label: 'Export เป็น Excel', data: 'action=dash&do=export_excel' }
+          }
         ]
-      },
-      styles: { header: { backgroundColor: '#FFFFFF' }, body: { backgroundColor: '#FFFFFF' }, footer: { backgroundColor: '#FFFFFF' } }
+      }
     }
   };
 }
