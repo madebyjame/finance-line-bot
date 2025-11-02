@@ -562,6 +562,9 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
   const amountTxt = `${amount.toLocaleString()} บาท`;
   const chips = [ chip(type), chip(category) ];
 
+  // ตั้งสีปุ่มตามประเภท
+  const buttonColor = isIncome ? '#16A34A' : '#DC2626'; // เขียว/แดง
+
   return {
     type: 'flex',
     altText: title,
@@ -585,10 +588,10 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
       body: {
         type: 'box',
         layout: 'vertical',
-        spacing: 'md',          // เดิม 'md' ถูกแล้ว
-        paddingAll: 'md',       // เดิมไม่มี paddingAll → เพิ่มให้สวยขึ้น
+        spacing: 'md',
+        paddingAll: 'md',
         contents: [
-          { type: 'text', text: amountTxt, size: 'xl', weight: 'bold', color: THEME.textStrong }, // เดิม 'xxl' (ใหญ่ไปในบางจอ)
+          { type: 'text', text: amountTxt, size: 'xl', weight: 'bold', color: THEME.textStrong },
           { type: 'text', text: note || '-', size: 'sm', color: THEME.textMuted, wrap: true },
           { type: 'text', text: date, size: 'xs', color: THEME.textMuted },
           {
@@ -608,7 +611,7 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
           {
             type: 'button',
             style: 'primary',
-            color: THEME.accent,
+            color: buttonColor, // ✅ ใช้สีตามประเภท
             height: 'sm',
             action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' }
           },
@@ -623,6 +626,7 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
     }
   };
 }
+
 
 
 function buildDashboardMenuFlex() {
