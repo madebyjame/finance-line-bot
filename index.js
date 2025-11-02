@@ -650,25 +650,33 @@ async function analyzeWithGeminiForUser(userId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
 
-  const { facts, text } = await buildFinanceFactsForUser(userId, 3);
+  // ✅ ดึงเฉพาะข้อมูล 30 วันล่าสุด
+  const { facts, text } = await buildFinanceFactsForUser(userId, 1);
   if (!facts) return 'ยังไม่มีข้อมูลของคุณเลยครับ ลองบันทึกก่อนนะ';
 
-  const monthsKeys = facts?.monthOverMonth ? [facts.monthOverMonth.prev?.key, facts.monthOverMonth.last?.key].filter(Boolean).join(' → ') : '-';
+  const monthsKeys = facts?.monthOverMonth
+    ? [facts.monthOverMonth.prev?.key, facts.monthOverMonth.last?.key].filter(Boolean).join(' → ')
+    : '-';
   const momInc = facts?.monthOverMonth ? facts.monthOverMonth.diff.income : 0;
   const momExp = facts?.monthOverMonth ? facts.monthOverMonth.diff.expense : 0;
+  const topCats = (facts.categoryShares || [])
+    .slice(0, 5)
+    .map(x => `${x.category}:${Math.round(x.sum).toLocaleString()}(${Math.round(x.share * 100)}%)`)
+    .join(', ') || '-';
+  const outlierLines = (facts.outliers || [])
+    .slice(0, 5)
+    .map(o => `${o.date} ${o.category} ${o.amount.toLocaleString()}`)
+    .join('\n') || '-';
 
-  const topCats = (facts.categoryShares || []).slice(0, 5)
-    .map(x => `${x.category}:${Math.round(x.sum).toLocaleString()}(${Math.round(x.share*100)}%)`).join(', ') || '-';
+  // ✅ Prompt ใหม่: มืออาชีพ กระชับ bullet point + แจ้งว่า 30 วันล่าสุด
+  const prompt = `
+สรุปการเงินส่วนบุคคลจากข้อมูล 30 วันล่าสุด
+เขียนแบบมืออาชีพ กระชับ ไม่เกิน 100 คำ ใช้ bullet point อ่านง่าย ห้ามใช้สัญลักษณ์ตกแต่ง
 
-  const outlierLines = (facts.outliers || []).slice(0,5)
-    .map(o => `${o.date} ${o.category} ${o.amount.toLocaleString()}`).join('\n') || '-';
-
-const prompt = `
-สรุปการเงินส่วนบุคคลแบบมืออาชีพ กระชับ ไม่เกิน 100 คำ ใช้ bullet point อ่านง่าย ห้ามใช้สัญลักษณ์ตกแต่ง
 ข้อมูลรายการ:
 ${text}
 
-สรุปตัวเลข 3 เดือนล่าสุด:
+ตัวเลขรวมเดือนล่าสุด:
 - รายรับรวม ${facts.totalIncome.toLocaleString()} บาท
 - รายจ่ายรวม ${facts.totalExpense.toLocaleString()} บาท
 - คงเหลือ ${(facts.balance).toLocaleString()} บาท
@@ -676,15 +684,11 @@ ${text}
 - หมวดใช้จ่ายสูงสุด: ${topCats}
 - รายการโดดเด่น: ${outlierLines}
 
-ให้ตอบแบบ bullet point 3 ส่วน:
+ตอบเป็น bullet point 3 ส่วน:
 - หมวดที่ควรจับตาและเหตุผล
-- คำแนะนำสั้นๆ ที่ทำได้จริง 2–3 ข้อ
-- สรุปว่า “ปกติ” หรือ “ควรปรับ” พร้อมเหตุผล
-ไม่มีเครื่องหมายตกแต่ง เช่น ** หรือ *
+- คำแนะนำที่ทำได้จริง 2–3 ข้อ
+- สรุปว่า “ปกติ” หรือ “ควรปรับ” พร้อมเหตุผลสั้น
 `.trim();
-
-
-
 
   for (const model of MODEL_LIST) {
     try {
@@ -692,12 +696,13 @@ ${text}
       return msg;
     } catch (e) {
       const status = e?.response?.status;
-      if ([404,429,500,502,503,504].includes(status)) continue;
+      if ([404, 429, 500, 502, 503, 504].includes(status)) continue;
       return `เรียก AI ไม่ได้ (${model}): ${e?.response?.data?.error?.message || e.message}`;
     }
   }
   return 'Gemini ช้า/ล่มชั่วคราว ลองใหม่อีกครั้งครับ';
 }
+
 
 
 // 🎨 Flex UI
