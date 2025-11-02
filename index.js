@@ -358,6 +358,7 @@ function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
 }
 
 // สร้างภาพสรุปแดชบอร์ดจากข้อมูลของผู้ใช้
+// ============================ ปรับปรุง Dashboard Chart ============================
 async function buildDashboardImages(userId, rangeCode = '1m') {
   const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
@@ -373,26 +374,95 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
     const cat = r[3] || 'อื่นๆ';
     if (type === 'รายรับ') sumIncome += amt;
-    else if (type === 'รายจ่าย') { sumExpense += amt; catExpense[cat] = (catExpense[cat] || 0) + amt; }
+    else if (type === 'รายจ่าย') { 
+      sumExpense += amt; 
+      catExpense[cat] = (catExpense[cat] || 0) + amt; 
+    }
   }
   const balance = sumIncome - sumExpense;
+  const pretty = (n) => Number(n).toLocaleString();
 
+  // ====== กราฟแท่ง: รายรับ/รายจ่าย ======
   const barConfig = {
     type: 'bar',
-    data: { labels: ['รวม'], datasets: [{ label: 'รายรับ', data: [sumIncome] }, { label: 'รายจ่าย', data: [sumExpense] }] },
-    options: { plugins: { legend: { position: 'bottom' } } }
-  };
-  const pieLabels = Object.keys(catExpense);
-  const pieData = Object.values(catExpense);
-  const pieConfig = {
-    type: 'pie',
-    data: { labels: pieLabels.length ? pieLabels : ['ไม่มีรายจ่าย'], datasets: [{ data: pieData.length ? pieData : [1] }] },
-    options: { plugins: { legend: { position: 'bottom' } } }
+    data: {
+      labels: ['รายรับ-รายจ่ายรวม'],
+      datasets: [
+        { label: 'รายรับ', data: [sumIncome], backgroundColor: '#16A34A', borderColor: '#15803D', borderWidth: 2 },
+        { label: 'รายจ่าย', data: [sumExpense], backgroundColor: '#DC2626', borderColor: '#B91C1C', borderWidth: 2 }
+      ]
+    },
+    options: {
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { font: { size: 16 }, color: '#111111' }
+        },
+        datalabels: {
+          display: true,
+          color: '#111',
+          anchor: 'end',
+          align: 'top',
+          font: { size: 18, weight: 'bold' },
+          formatter: v => v.toLocaleString()
+        }
+      },
+      scales: {
+        y: { 
+          ticks: { color: '#374151', font: { size: 14 } },
+          grid: { color: '#E5E7EB' }
+        },
+        x: { ticks: { color: '#374151', font: { size: 14 } } }
+      },
+      layout: { padding: 20 },
+      backgroundColor: '#FFFFFF'
+    }
   };
 
-  const barUrl = buildQuickChartUrl(barConfig);
-  const pieUrl = buildQuickChartUrl(pieConfig, { w: 600, h: 600 });
-  const pretty = (n) => Number(n).toLocaleString();
+  // ====== กราฟพาย: หมวดหมู่รายจ่าย ======
+  const pieLabels = Object.keys(catExpense);
+  const pieData = Object.values(catExpense);
+  const pieColors = [
+    '#F87171','#FBBF24','#34D399','#60A5FA','#A78BFA','#F472B6','#FCD34D','#4ADE80','#93C5FD','#C084FC'
+  ];
+
+  const pieConfig = {
+    type: 'pie',
+    data: {
+      labels: pieLabels.length ? pieLabels : ['ไม่มีรายจ่าย'],
+      datasets: [{
+        data: pieData.length ? pieData : [1],
+        backgroundColor: pieLabels.length ? pieColors.slice(0, pieLabels.length) : ['#E5E7EB'],
+        borderColor: '#FFFFFF',
+        borderWidth: 2
+      }]
+    },
+    options: {
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: { font: { size: 14 }, color: '#111111' }
+        },
+        datalabels: {
+          display: true,
+          color: '#111111',
+          font: { size: 14, weight: 'bold' },
+          formatter: (v, ctx) => {
+            const label = ctx.chart.data.labels[ctx.dataIndex];
+            const total = pieData.reduce((a, b) => a + b, 0);
+            const percent = total ? Math.round((v / total) * 100) : 0;
+            return `${label}\n${percent}%`;
+          }
+        }
+      },
+      layout: { padding: 20 },
+      backgroundColor: '#FFFFFF'
+    }
+  };
+
+  const barUrl = buildQuickChartUrl(barConfig, { w: 1000, h: 500 });
+  const pieUrl = buildQuickChartUrl(pieConfig, { w: 800, h: 800 });
+  
   const note = [
     `ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
     `รายรับรวม: ${pretty(sumIncome)} บาท`,
@@ -402,6 +472,7 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
 
   return { note, barUrl, pieUrl };
 }
+
 // ============================ END DASHBOARD HELPERS ============================
 
 // -------- Gemini --------
