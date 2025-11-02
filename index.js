@@ -528,12 +528,25 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const pieUrl    = buildQuickChartUrl(pieConfig,    { w: 900,  h: 900  });
   const catBarUrl = buildQuickChartUrl(catBarConfig, { w: 1000, h: 1100 });
 
-  const note = [
-    `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
-    `💚 รายรับรวม: ${pretty(sumIncome)} บาท`,
-    `❤️ รายจ่ายรวม: ${pretty(sumExpense)} บาท`,
-    `💰 คงเหลือ: ${pretty(balance)} บาท`
-  ].join('\n');
+// === สร้างข้อความสรุปหมวดหมู่ ===
+const allCategories = Array.from(new Set([...Object.keys(catExpense), ...Object.keys(catIncome)]));
+const catSummaryLines = allCategories.map(name => {
+  const inc = catIncome[name]  || 0;
+  const exp = catExpense[name] || 0;
+  return `• ${name} — รับ ${pretty(inc)} บ. | จ่าย ${pretty(exp)} บ.`;
+});
+
+// === สร้าง note รวมทั้งหมด ===
+const note = [
+  `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
+  `💚 รายรับรวม: ${pretty(sumIncome)} บาท`,
+  `❤️ รายจ่ายรวม: ${pretty(sumExpense)} บาท`,
+  `💰 คงเหลือ: ${pretty(balance)} บาท`,
+  '',
+  '🧾 สรุปแต่ละหมวด:',
+  ...catSummaryLines
+].join('\n');
+
 
   return {
     note,
@@ -544,11 +557,7 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   };
 }
 
-
-
-
-
-// ============================ END DASHBOARD HELPERS ============================
+// =========================== END DASHBOARD HELPERS ============================
 
 // -------- Gemini --------
 const ENV_MODEL = (process.env.GEMINI_MODEL || '').trim();
