@@ -946,19 +946,16 @@ async function handleEvent(event) {
       }
 
       const userId = event.source?.userId || 'anonymous';
-const dash = await buildDashboardImages(userId, range || '1m');
+      const dash = await buildDashboardImages(userId, range || '1m');
 
-const msgs = [];
-if (dash.note)            msgs.push({ type: 'text',  text: dash.note });
-if (dash.catSummaryText)  msgs.push({ type: 'text',  text: dash.catSummaryText }); // <<== เพิ่มบรรทัดนี้
-if (dash.catBarUrl)       msgs.push({ type: 'image', originalContentUrl: dash.catBarUrl, previewImageUrl: dash.catBarUrl });
-// ถ้าอยากแสดงกราฟรวมและพายด้วย ก็เพิ่มสองบรรทัดนี้ได้
-if (dash.barUrl)          msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
-if (dash.pieUrl)          msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
+      const msgs = [];
+      if (dash.note)   msgs.push({ type: 'text',  text: dash.note });
+      if (dash.barUrl) msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
+      if (dash.pieUrl) msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
 
-if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
-return lineClient.replyMessage(event.replyToken, msgs);
-
+      if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
+      return lineClient.replyMessage(event.replyToken, msgs);
+    }
 
     return; // postback แต่ไม่เข้ากรณีไหน
   }
