@@ -359,6 +359,7 @@ function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
 
 // สร้างภาพสรุปแดชบอร์ดจากข้อมูลของผู้ใช้
 // ============================ ปรับปรุง Dashboard Chart ============================
+// ============================ Modern Dashboard Chart ============================
 async function buildDashboardImages(userId, rangeCode = '1m') {
   const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
@@ -382,48 +383,58 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const balance = sumIncome - sumExpense;
   const pretty = (n) => Number(n).toLocaleString();
 
-  // ====== กราฟแท่ง: รายรับ/รายจ่าย ======
+  // 🎨 สไตล์โทนสี
+  const COLORS = {
+    income: '#16A34A',      // เขียว
+    expense: '#DC2626',     // แดง
+    text: '#111111',
+    grid: '#E5E7EB',
+    bg: '#FFFFFF'
+  };
+
+  // 📊 กราฟแท่ง
   const barConfig = {
     type: 'bar',
     data: {
-      labels: ['รายรับ-รายจ่ายรวม'],
+      labels: ['ภาพรวมรายรับ/รายจ่าย'],
       datasets: [
-        { label: 'รายรับ', data: [sumIncome], backgroundColor: '#16A34A', borderColor: '#15803D', borderWidth: 2 },
-        { label: 'รายจ่าย', data: [sumExpense], backgroundColor: '#DC2626', borderColor: '#B91C1C', borderWidth: 2 }
+        { label: 'รายรับ', data: [sumIncome], backgroundColor: COLORS.income, borderColor: '#15803D', borderWidth: 3 },
+        { label: 'รายจ่าย', data: [sumExpense], backgroundColor: COLORS.expense, borderColor: '#B91C1C', borderWidth: 3 }
       ]
     },
     options: {
       plugins: {
         legend: {
           position: 'bottom',
-          labels: { font: { size: 16 }, color: '#111111' }
+          labels: { font: { size: 48 }, color: COLORS.text }   // ↑ ฟอนต์ใหญ่ขึ้น 3 เท่า
         },
         datalabels: {
           display: true,
-          color: '#111',
+          color: COLORS.text,
           anchor: 'end',
           align: 'top',
-          font: { size: 18, weight: 'bold' },
+          font: { size: 54, weight: 'bold' },                  // ↑ ตัวเลขใหญ่
           formatter: v => v.toLocaleString()
         }
       },
       scales: {
         y: { 
-          ticks: { color: '#374151', font: { size: 14 } },
-          grid: { color: '#E5E7EB' }
+          ticks: { color: COLORS.text, font: { size: 42 } },
+          grid: { color: COLORS.grid }
         },
-        x: { ticks: { color: '#374151', font: { size: 14 } } }
+        x: { ticks: { color: COLORS.text, font: { size: 42 } } }
       },
-      layout: { padding: 20 },
-      backgroundColor: '#FFFFFF'
+      layout: { padding: 40 },
+      backgroundColor: COLORS.bg
     }
   };
 
-  // ====== กราฟพาย: หมวดหมู่รายจ่าย ======
+  // 🥧 กราฟวงกลม
   const pieLabels = Object.keys(catExpense);
   const pieData = Object.values(catExpense);
   const pieColors = [
-    '#F87171','#FBBF24','#34D399','#60A5FA','#A78BFA','#F472B6','#FCD34D','#4ADE80','#93C5FD','#C084FC'
+    '#60A5FA','#34D399','#FBBF24','#F87171','#A78BFA',
+    '#F472B6','#FCD34D','#4ADE80','#93C5FD','#C084FC'
   ];
 
   const pieConfig = {
@@ -434,19 +445,19 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
         data: pieData.length ? pieData : [1],
         backgroundColor: pieLabels.length ? pieColors.slice(0, pieLabels.length) : ['#E5E7EB'],
         borderColor: '#FFFFFF',
-        borderWidth: 2
+        borderWidth: 3
       }]
     },
     options: {
       plugins: {
         legend: {
           position: 'right',
-          labels: { font: { size: 14 }, color: '#111111' }
+          labels: { font: { size: 42 }, color: COLORS.text }   // ↑ ตัวใหญ่
         },
         datalabels: {
           display: true,
-          color: '#111111',
-          font: { size: 14, weight: 'bold' },
+          color: COLORS.text,
+          font: { size: 42, weight: 'bold' },
           formatter: (v, ctx) => {
             const label = ctx.chart.data.labels[ctx.dataIndex];
             const total = pieData.reduce((a, b) => a + b, 0);
@@ -455,14 +466,15 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
           }
         }
       },
-      layout: { padding: 20 },
-      backgroundColor: '#FFFFFF'
+      layout: { padding: 40 },
+      backgroundColor: COLORS.bg
     }
   };
 
-  const barUrl = buildQuickChartUrl(barConfig, { w: 1000, h: 500 });
-  const pieUrl = buildQuickChartUrl(pieConfig, { w: 800, h: 800 });
-  
+  // 🖼️ ขนาดภาพ (ใหญ่ขึ้น)
+  const barUrl = buildQuickChartUrl(barConfig, { w: 1600, h: 900 });
+  const pieUrl = buildQuickChartUrl(pieConfig, { w: 1200, h: 1200 });
+
   const note = [
     `ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
     `รายรับรวม: ${pretty(sumIncome)} บาท`,
@@ -472,6 +484,7 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
 
   return { note, barUrl, pieUrl };
 }
+
 
 // ============================ END DASHBOARD HELPERS ============================
 
