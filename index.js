@@ -358,6 +358,7 @@ function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
 }
 
 // ============================ Modern Mobile Dashboard + Category Summary ============================
+// ============================ Dashboard + Category Summary Text ============================
 async function buildDashboardImages(userId, rangeCode = '1m') {
   const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
@@ -368,12 +369,16 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
 
   let sumIncome = 0, sumExpense = 0;
   const catExpense = {};
+  const catIncome  = {};
+
   for (const r of inRange) {
     const type = r[1];
     const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
     const cat = r[3] || 'อื่นๆ';
-    if (type === 'รายรับ') sumIncome += amt;
-    else if (type === 'รายจ่าย') {
+    if (type === 'รายรับ') {
+      sumIncome += amt;
+      catIncome[cat]  = (catIncome[cat]  || 0) + amt;
+    } else if (type === 'รายจ่าย') {
       sumExpense += amt;
       catExpense[cat] = (catExpense[cat] || 0) + amt;
     }
@@ -382,31 +387,51 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const balance = sumIncome - sumExpense;
   const pretty = (n) => Number(n).toLocaleString();
 
-  // ✅ ทำสรุปยอดต่อหมวดหมู่ (เรียงจากมากไปน้อย)
-  const catEntries = Object.entries(catExpense).sort((a,b) => b[1] - a[1]);
-  const totalCat = catEntries.reduce((acc, [,v]) => acc + v, 0);
-  const catSummaryText = catEntries.length
-    ? 'สรุปรายจ่ายตามหมวด (มาก→น้อย)\n' + catEntries
-        .map(([name, val], i) => `${i+1}. ${name} — ${pretty(val)} บ. (${Math.round((val/totalCat)*100)}%)`)
-        .join('\n')
-    : 'ยังไม่มีรายจ่ายในช่วงเวลานี้';
+  // ==== เรียงหมวดและรวมยอด ====
+  const expEntries = Object.entries(catExpense).sort((a,b) => b[1]-a[1]);
+  const incEntries = Object.entries(catIncome ).sort((a,b) => b[1]-a[1]);
+  const totalExp = expEntries.reduce((a,[,v]) => a+v, 0);
+  const totalInc = incEntries.reduce((a,[,v]) => a+v, 0);
 
-  // 🎨 โทนสี
+  // ==== สรุปแบบข้อความก้อนเดียว (รายหมวด) ====
+  // รวมทุกหมวดเป็นรายการเดียวกันเพื่ออ่านง่ายบนมือถือ
+  const allCats = Array.from(new Set([...Object.keys(catExpense), ...Object.keys(catIncome)]));
+  // เรียงตาม “จ่าย” ก่อน แล้วตาม “รับ”
+  const both = allCats
+    .map(name => ({ name, inc: catIncome[name]||0, exp: catExpense[name]||0 }))
+    .sort((a,b) => (b.exp - a.exp) || (b.inc - a.inc));
+
+  const MAX_LINES = 12; // กันยาวเกินใน LINE
+  const lines = both.slice(0, MAX_LINES).map((x, i) => {
+    const pExp = totalExp ? Math.round((x.exp/totalExp)*100) : 0;
+    const pInc = totalInc ? Math.round((x.inc/totalInc)*100) : 0;
+    return `${i+1}. ${x.name} — รับ ${pretty(x.inc)} บ. (${pInc}%) | จ่าย ${pretty(x.exp)} บ. (${pExp}%)`;
+  });
+  if (both.length > MAX_LINES) lines.push(`… และอีก ${both.length - MAX_LINES} หมวด`);
+
+  const catSummaryText =
+    (both.length
+      ? [
+          '📊 สรุปตามหมวด (รับ | จ่าย)',
+          ...lines
+        ].join('\n')
+      : 'ยังไม่มีข้อมูลรายรับ/รายจ่ายตามหมวดในช่วงเวลานี้');
+
+  // 🎨 โทนสี + กราฟ (เหมือนเดิมที่ปรับอ่านง่าย)
   const COLORS = {
-    income: '#22C55E',  // เขียวสด
-    expense: '#EF4444', // แดงสด
+    income: '#22C55E',
+    expense: '#EF4444',
     text: '#111827',
     grid: '#E5E7EB',
     bg: '#FFFFFF'
   };
 
-  // ==================== BAR CHART (สรุปรายรับ/รายจ่ายรวม) ====================
   const barConfig = {
     type: 'bar',
     data: {
       labels: ['สรุปรายรับ/รายจ่ายรวม'],
       datasets: [
-        { label: 'รายรับ', data: [sumIncome], backgroundColor: COLORS.income, borderWidth: 3 },
+        { label: 'รายรับ', data: [sumIncome],  backgroundColor: COLORS.income,  borderWidth: 3 },
         { label: 'รายจ่าย', data: [sumExpense], backgroundColor: COLORS.expense, borderWidth: 3 }
       ]
     },
@@ -414,12 +439,8 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
       plugins: {
         legend: { position: 'bottom', labels: { font: { size: 32 }, color: COLORS.text } },
         datalabels: {
-          display: true,
-          color: COLORS.text,
-          anchor: 'end',
-          align: 'top',
-          font: { size: 36, weight: 'bold' },
-          formatter: v => v.toLocaleString()
+          display: true, color: COLORS.text, anchor: 'end', align: 'top',
+          font: { size: 36, weight: 'bold' }, formatter: v => v.toLocaleString()
         }
       },
       scales: {
@@ -431,14 +452,10 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     }
   };
 
-  // ==================== PIE CHART (ชื่อหมวดอยู่ในชิ้น) ====================
-  const pieLabels = catEntries.map(([name]) => name);
-  const pieData = catEntries.map(([,val]) => val);
-  const total = pieData.reduce((a, b) => a + b, 0);
-  const pieColors = [
-    '#60A5FA', '#34D399', '#FBBF24', '#F87171', '#A78BFA',
-    '#F472B6', '#FCD34D', '#4ADE80', '#93C5FD', '#C084FC'
-  ];
+  const pieLabels = expEntries.map(([name]) => name);
+  const pieData   = expEntries.map(([,val]) => val);
+  const pieTotal  = pieData.reduce((a,b)=>a+b,0);
+  const pieColors = ['#60A5FA','#34D399','#FBBF24','#F87171','#A78BFA','#F472B6','#FCD34D','#4ADE80','#93C5FD','#C084FC'];
 
   const pieConfig = {
     type: 'pie',
@@ -447,20 +464,17 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
       datasets: [{
         data: pieData.length ? pieData : [1],
         backgroundColor: pieLabels.length ? pieColors.slice(0, pieLabels.length) : ['#E5E7EB'],
-        borderColor: '#FFFFFF',
-        borderWidth: 3
+        borderColor: '#FFFFFF', borderWidth: 3
       }]
     },
     options: {
       plugins: {
-        legend: { display: false }, // ซ่อน legend เพื่อเน้น label ในชิ้น
+        legend: { display: false },
         datalabels: {
-          display: true,
-          color: '#FFFFFF',
-          font: { size: 36, weight: 'bold' },
+          display: true, color: '#FFFFFF', font: { size: 36, weight: 'bold' },
           formatter: (v, ctx) => {
             const label = ctx.chart.data.labels[ctx.dataIndex];
-            const percent = total ? Math.round((v / total) * 100) : 0;
+            const percent = pieTotal ? Math.round((v / pieTotal) * 100) : 0;
             return `${label}\n${percent}%`;
           }
         },
@@ -479,9 +493,8 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     }
   };
 
-  // ==================== CATEGORY BAR (แนวนอน อ่านง่ายบนมือถือ) ====================
   const catBarLabels = pieLabels;
-  const catBarData = pieData;
+  const catBarData   = pieData;
   const catBarConfig = {
     type: 'bar',
     data: {
@@ -494,34 +507,26 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
       }]
     },
     options: {
-      indexAxis: 'y', // แนวนอน
+      indexAxis: 'y',
       plugins: {
         legend: { position: 'bottom', labels: { font: { size: 28 }, color: COLORS.text } },
         datalabels: {
-          display: true,
-          color: COLORS.text,
-          anchor: 'end',
-          align: 'right',
-          font: { size: 32, weight: 'bold' },
-          formatter: v => pretty(v)
+          display: true, color: COLORS.text, anchor: 'end', align: 'right',
+          font: { size: 32, weight: 'bold' }, formatter: v => pretty(v)
         }
       },
       scales: {
         x: { ticks: { color: COLORS.text, font: { size: 26 } }, grid: { color: COLORS.grid } },
-        y: {
-          ticks: { color: '#111827', font: { size: 30 } }, // ชื่อหมวดตัวใหญ่
-          grid: { color: COLORS.grid }
-        }
+        y: { ticks: { color: COLORS.text, font: { size: 30 } }, grid: { color: COLORS.grid } }
       },
       layout: { padding: 24 },
       backgroundColor: COLORS.bg
     }
   };
 
-  // ==================== สร้างภาพ ====================
-  const barUrl     = buildQuickChartUrl(barConfig,     { w: 900, h: 700 });
-  const pieUrl     = buildQuickChartUrl(pieConfig,     { w: 900, h: 900 });
-  const catBarUrl  = buildQuickChartUrl(catBarConfig,  { w: 1000, h: 1100 });
+  const barUrl    = buildQuickChartUrl(barConfig,    { w: 900,  h: 700  });
+  const pieUrl    = buildQuickChartUrl(pieConfig,    { w: 900,  h: 900  });
+  const catBarUrl = buildQuickChartUrl(catBarConfig, { w: 1000, h: 1100 });
 
   const note = [
     `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
@@ -530,8 +535,15 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     `💰 คงเหลือ: ${pretty(balance)} บาท`
   ].join('\n');
 
-  return { note, barUrl, pieUrl, catSummaryText: catSummaryText, catBarUrl };
+  return {
+    note,
+    barUrl,
+    pieUrl,
+    catBarUrl,
+    catSummaryText // <<==== เพิ่มก้อนข้อความสรุปรายหมวด
+  };
 }
+
 
 
 
@@ -934,16 +946,19 @@ async function handleEvent(event) {
       }
 
       const userId = event.source?.userId || 'anonymous';
-      const dash = await buildDashboardImages(userId, range || '1m');
+const dash = await buildDashboardImages(userId, range || '1m');
 
-      const msgs = [];
-      if (dash.note)   msgs.push({ type: 'text',  text: dash.note });
-      if (dash.barUrl) msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
-      if (dash.pieUrl) msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
+const msgs = [];
+if (dash.note)            msgs.push({ type: 'text',  text: dash.note });
+if (dash.catSummaryText)  msgs.push({ type: 'text',  text: dash.catSummaryText }); // <<== เพิ่มบรรทัดนี้
+if (dash.catBarUrl)       msgs.push({ type: 'image', originalContentUrl: dash.catBarUrl, previewImageUrl: dash.catBarUrl });
+// ถ้าอยากแสดงกราฟรวมและพายด้วย ก็เพิ่มสองบรรทัดนี้ได้
+if (dash.barUrl)          msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
+if (dash.pieUrl)          msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
 
-      if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
-      return lineClient.replyMessage(event.replyToken, msgs);
-    }
+if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
+return lineClient.replyMessage(event.replyToken, msgs);
+
 
     return; // postback แต่ไม่เข้ากรณีไหน
   }
