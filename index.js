@@ -661,23 +661,24 @@ async function analyzeWithGeminiForUser(userId) {
     .map(o => `${o.date} ${o.category} ${o.amount.toLocaleString()}`).join('\n') || '-';
 
 const prompt = `
-ช่วยสรุปการเงินส่วนตัวให้เหมือนเพื่อนวิเคราะห์ให้ฟัง (พูดสั้นๆ เข้าใจง่าย)
-ข้อมูล:
+สรุปการเงินส่วนบุคคลแบบมืออาชีพ ภาษาพูด สั้น กระชับ ไม่เกิน 100 คำ ห้ามใช้สัญลักษณ์พิเศษ
+ข้อมูลรายการ:
 ${text}
 
-สรุปรวม (3 เดือนล่าสุด):
-- รายรับ: ${facts.totalIncome.toLocaleString()} บาท
-- รายจ่าย: ${facts.totalExpense.toLocaleString()} บาท
-- คงเหลือ: ${(facts.balance).toLocaleString()} บาท
-- หมวดใช้จ่ายเยอะสุด: ${topCats}
-- รายการเด่น: ${outlierLines}
+ตัวเลขรวม 3 เดือนล่าสุด:
+รายรับรวม ${facts.totalIncome.toLocaleString()} บาท รายจ่ายรวม ${facts.totalExpense.toLocaleString()} บาท คงเหลือ ${(facts.balance).toLocaleString()} บาท
+เทียบเดือนต่อเดือน ${monthsKeys} รายรับเปลี่ยนแปลง ${momInc.toLocaleString()} รายจ่ายเปลี่ยนแปลง ${momExp.toLocaleString()}
+หมวดใช้จ่ายสูงสุด: ${topCats}
+รายการโดดเด่น:
+${outlierLines}
 
-ขอสรุปแบบสั้นๆ:
-1) หมวดไหนควรจับตา (พร้อมเหตุผล)
-2) แนะนำ 2–3 ข้อปรับตัวง่ายๆ
-3) สรุปว่า “ปกติ” หรือ “ควรปรับ” พร้อมกำลังใจตอนท้าย
-พูดแบบเพื่อน ไม่ต้องเป็นทางการ
+บังคับตอบสามส่วนในย่อหน้าสั้นเดียว:
+1 หมวดที่ควรจับตาและเหตุผล
+2 คำแนะนำทำได้จริง 2–3 ข้อ
+3 สรุปว่า ปกติ หรือ ควรปรับ
 `.trim();
+
+
 
 
   for (const model of MODEL_LIST) {
