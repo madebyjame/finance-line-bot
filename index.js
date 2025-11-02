@@ -6,17 +6,20 @@
  * - แยกข้อมูลเป็น "แท็บชีตต่อผู้ใช้" อัตโนมัติ
  */
 require('dotenv').config();
+
 const fs = require("fs");
+const express = require('express');
+const { Client, middleware } = require('@line/bot-sdk');
+const { google } = require('googleapis');        // ✅ ต้องมี
+const axios = require('axios');                  // ✅ ต้องมี
+
+const app = express();
+
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
   const path = "/tmp/google.json";
   fs.writeFileSync(path, process.env.GOOGLE_CREDENTIALS_JSON);
   process.env.GOOGLE_SERVICE_ACCOUNT_FILE = path;
 }
-
-require('dotenv').config();
-const express = require('express');
-const { Client, middleware } = require('@line/bot-sdk');
-const app = express();
 
 const lineConfig = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
@@ -120,11 +123,9 @@ function monthKeyFromThaiDate(s) {
 
 // รวมยอดเป็นรายเดือน พร้อม breakdown
 async function buildMonthlyFactsForUser(userId, months = 2) {
-  // อ่านข้อมูลผู้ใช้ (ไม่เกิน 2000 แถวพอ)
   const rows = await readRecentRowsForUser(userId, 2000);
   if (!rows || rows.length === 0) return { monthsData: [], keys: [] };
 
-  // เก็บเฉพาะช่วง N เดือนล่าสุด
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
 
@@ -147,7 +148,6 @@ async function buildMonthlyFactsForUser(userId, months = 2) {
     }
   }
 
-  // เรียง key จากเก่า->ใหม่ แล้วตัดให้เหลือ N เดือน (เผื่อมีช่องว่าง)
   const keys = Object.keys(monthly).sort().slice(-months);
   const monthsData = keys.map(k => {
     const m = monthly[k];
@@ -165,10 +165,9 @@ async function buildMonthlyFactsForUser(userId, months = 2) {
 
 // สร้างข้อเท็จจริง (facts) สำหรับช่วง N เดือนล่าสุด
 async function buildFinanceFactsForUser(userId, months = 3) {
-  const rows = await readRecentRowsForUser(userId, 1000); // ใช้ข้อมูลพอประมาณ
+  const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { rows: [], facts: null, text: 'NO_DATA' };
 
-  // เลือกเฉพาะ N เดือนล่าสุด
   const now = new Date();
   const cutoff = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
   const filtered = rows.filter(r => {
@@ -176,11 +175,10 @@ async function buildFinanceFactsForUser(userId, months = 3) {
     return d && d >= cutoff;
   });
 
-  // สรุปตัวเลข
   let income = 0, expense = 0;
-  const byCategory = {};      // {cat: sumExpense}
-  const byMonth = {};         // {YYYY-MM: {income, expense}}
-  const singles = [];         // รายการเดี่ยว (สำหรับ outlier)
+  const byCategory = {};
+  const byMonth = {};
+  const singles = [];
 
   for (const r of filtered) {
     const [date, type, amountRaw, categoryRaw] = r;
@@ -200,33 +198,24 @@ async function buildFinanceFactsForUser(userId, months = 3) {
     }
   }
 
-  // จัดอันดับหมวดรายจ่ายตามสัดส่วน
   const categoryShares = Object.entries(byCategory)
-    .map(([cat, sum]) => ({
-      category: cat,
-      sum,
-      share: expense > 0 ? sum / expense : 0
-    }))
+    .map(([cat, sum]) => ({ category: cat, sum, share: expense > 0 ? sum / expense : 0 }))
     .sort((a,b) => b.sum - a.sum);
 
-  // ค่ากลางของรายจ่ายเดี่ยว (สำหรับดู outlier)
   const amounts = singles.map(s => s.amount).sort((a,b) => a-b);
   const median = amounts.length ? (amounts[Math.floor(amounts.length/2)] + amounts[Math.ceil(amounts.length/2)-1]) / 2 : 0;
   const mean = amounts.length ? (amounts.reduce((a,b)=>a+b,0)/amounts.length) : 0;
 
-  // ระบุ “หมวดที่น่าพิจารณา” ด้วยกติกา
   const interestingCats = categoryShares.filter(x =>
     x.share >= FINANCE_RULES.CATEGORY_SHARE_ALERT ||
     x.sum >= FINANCE_RULES.MIN_MONTHLY_CATEGORY_SUM
   );
 
-  // คัดรายการเดี่ยวที่ “ใหญ่ผิดปกติ” (ข้ามยอดเล็ก)
   const outliers = singles.filter(s =>
     s.amount >= FINANCE_RULES.MIN_SINGLE_IGNORE &&
     (median > 0 ? s.amount >= FINANCE_RULES.OUTLIER_MULTIPLIER * median : s.amount >= FINANCE_RULES.MIN_MONTHLY_CATEGORY_SUM)
   ).sort((a,b) => b.amount - a.amount).slice(0, 10);
 
-  // month-over-month (ล่าสุดเทียบก่อนหน้า)
   const keys = Object.keys(byMonth).sort();
   const lastKey = keys[keys.length - 1];
   const prevKey = keys[keys.length - 2];
@@ -246,14 +235,13 @@ async function buildFinanceFactsForUser(userId, months = 3) {
     balance: income - expense,
     medianSingleExpense: median,
     meanSingleExpense: mean,
-    categoryShares,        // เรียงจากมากไปน้อย
-    interestingCats,       // หมวดที่เข้าหลักเกณฑ์
-    outliers,              // รายการเดี่ยวที่ผิดปกติ
-    monthOverMonth: mom,   // เทียบเดือนล่าสุดกับก่อนหน้า
+    categoryShares,
+    interestingCats,
+    outliers,
+    monthOverMonth: mom,
     rules: FINANCE_RULES,
   };
 
-  // พร้อมข้อความแถวๆ สำหรับ AI (แบบกะทัดรัด)
   const text = rows.map(r => {
     const [date, type, amount, category] = r;
     return `${date} | ${type} | ${amount} | ${category || '-'}`;
@@ -491,17 +479,14 @@ ${lines}
   return 'Gemini ช้า/ล่มชั่วคราว ลองพิมพ์ "วิเคราะห์" ใหม่ครับ';
 }
 
-// วิเคราะห์เฉพาะของผู้ใช้ (เวอร์ชัน per-user)
 // วิเคราะห์เฉพาะของผู้ใช้ (แฟกต์เบส + กติกา)
 async function analyzeWithGeminiForUser(userId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
 
-  // ใช้ facts 3 เดือนล่าสุด
   const { facts, text } = await buildFinanceFactsForUser(userId, 3);
   if (!facts) return 'ยังไม่มีข้อมูลของคุณเลยครับ ลองบันทึกก่อนนะ';
 
-  // สร้างสรุปตัวเลขสำหรับ prompt
   const monthsKeys = facts?.monthOverMonth ? [facts.monthOverMonth.prev?.key, facts.monthOverMonth.last?.key].filter(Boolean).join(' → ') : '-';
   const momInc = facts?.monthOverMonth ? facts.monthOverMonth.diff.income : 0;
   const momExp = facts?.monthOverMonth ? facts.monthOverMonth.diff.expense : 0;
@@ -513,7 +498,6 @@ async function analyzeWithGeminiForUser(userId) {
     .map(o => `${o.date} ${o.category} ${o.amount.toLocaleString()}`).join('\n') || '-';
 
   const prompt = `
-<<<<<<< HEAD
 คุณเป็นผู้ช่วยวิเคราะห์การเงินส่วนบุคคล ให้สรุปข้อมูลล่าสุดแบบอ่านง่าย ไม่ใช้ Markdown
 ข้อมูลแถวต่อแถว:
 ${text}
@@ -531,26 +515,6 @@ ${outlierLines}
 1) เดือนล่าสุดควรจับตาหมวดไหน เพราะอะไร (สั้น)
 2) คำแนะนำเชิงปฏิบัติ 2-3 ข้อ (ตั้งเพดาน/ลดความถี่/ย้ายเป็นคงที่ ฯลฯ)
 3) สรุปรวมว่า “ภาพรวมปกติ” หรือ “ควรปรับ” พร้อมเหตุผลสั้น ๆ
-=======
-คุณเป็นผู้จัดการการเงินส่วนบุคคล ทำสรุปรายเดือนจากตารางด้านล่าง
-ให้สรุปเฉพาะ "รายเดือน" เน้นความจริงตามตัวเลข และแนะนำแบบทำได้จริง
-ห้ามใส่สัญลักษณ์ Markdown เช่น **, __, *, _, • ให้ตอบเป็นข้อความธรรมดาเท่านั้น
-
-= ตารางสรุปรายเดือน (ล่าสุด ${months} เดือน) =
-${tableLines}
-
-= สรุปเทียบเดือนต่อเดือน (MoM) =
-${mom}
-
-= งานที่ต้องตอบ =
-1) สรุปสั้น ๆ ว่าเดือนล่าสุด รายรับ-รายจ่าย-คงเหลือ เท่าไหร่ (ระบุเดือน)
-2) ระบุหมวดใช้เงินสูงสุดของเดือนล่าสุด (ระบุจำนวนโดยประมาณ)
-3) เปรียบเทียบกับเดือนก่อน: ใช้มากขึ้น/น้อยลงด้านไหนบ้าง
-4) ให้คำแนะนำ 2-3 ข้อที่ทำได้จริงในเดือนถัดไป (เช่น ตั้งเพดานหมวด, เปลี่ยนความถี่, ย้ายค่าใช้จ่ายคงที่)
-5) ถ้าโดยรวมปกติดี ให้บอกว่า "ภาพรวมปกติ" ชัดเจน
-
-ตอบเป็นภาษาไทยแบบอ่านง่าย ใช้ย่อหน้าและขีดกลาง (-) ธรรมดาแยกบรรทัด ไม่ใช้ตัวหนาหรือสัญลักษณ์พิเศษ
->>>>>>> parent of 0270b90 (Update index.js)
 `.trim();
 
   for (const model of MODEL_LIST) {
@@ -577,10 +541,10 @@ function chip(text, bg = THEME.accentSoft, color = THEME.accent) {
 
 // ===== FINANCE RULES (เกณฑ์เพื่อกันแนะนำมั่ว) =====
 const FINANCE_RULES = {
-  MIN_SINGLE_IGNORE: 100,            // ข้ามรายการเดี่ยวที่ต่ำกว่า X บาท (เว้นแต่มียอดรวมหมวดนี้สูง)
-  MIN_MONTHLY_CATEGORY_SUM: 1000,    // หมวดไหนรวมต่อเดือนต่ำกว่า X ให้ถือว่า "ปกติ"
-  CATEGORY_SHARE_ALERT: 0.15,        // ถ้าหมวดกินสัดส่วน > 15% ของรายจ่ายรวม → น่าสนใจ
-  OUTLIER_MULTIPLIER: 1.3,           // มากกว่า median/เฉลี่ย 1.3 เท่า → ถือว่าโผล่
+  MIN_SINGLE_IGNORE: 100,
+  MIN_MONTHLY_CATEGORY_SUM: 1000,
+  CATEGORY_SHARE_ALERT: 0.15,
+  OUTLIER_MULTIPLIER: 1.3,
   ESSENTIAL_CATEGORIES: ['บิล/สาธารณูปโภค', 'ค่าเช่า', 'ที่อยู่อาศัย', 'การเดินทางจำเป็น'],
 };
 
@@ -614,9 +578,8 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
         type: 'box', layout: 'horizontal', spacing: 'md', contents: [
           { type: 'button', style: 'primary', color: THEME.accent, height: 'sm',
             action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' } },
-             { type: 'button', style: 'link',
-                    action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
-
+          { type: 'button', style: 'link',
+            action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
         ]
       }
     }
@@ -649,13 +612,12 @@ function buildDashboardMenuFlex() {
         paddingAll: '16px',
         contents: [
           { type: 'box', layout: 'horizontal', spacing: '8px', contents: [
-  { type: 'button', style: 'link', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
-{ type: 'button', style: 'link', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } },
-{ type: 'button', style: 'link', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
-{ type: 'button', style: 'link', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } },
-{ type: 'button', style: 'link', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } },
-
-          ]}
+            { type: 'button', style: 'link', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
+            { type: 'button', style: 'link', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } },
+            { type: 'button', style: 'link', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
+            { type: 'button', style: 'link', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } },
+            { type: 'button', style: 'link', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } },
+          ] }
         ]
       },
       footer: {
@@ -684,6 +646,8 @@ function buildSavePayload({ type, amount, category, note }) {
 app.get('/webhook', (req, res) => {
   res.status(200).send('OK');
 });
+
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true, ts: Date.now() })); // ✅ health check
 
 app.post('/webhook', middleware(lineConfig), (req, res) => {
   try {
@@ -805,23 +769,22 @@ async function handleEvent(event) {
   // ฟอร์แมตชัดเจน (รองรับคอมม่า/ทศนิยม)
   const spendRegex  = /^(รายจ่าย)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
   const incomeRegex = /^(รายรับ)\s+((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s+(.+)$/i;
+
   // ===== สรุปรายเดือน + เทียบเดือนก่อน =====
-  
-// ตัวอย่างคำเรียก: "สรุปรายเดือน", "สรุปเดือนนี้", "รายเดือน", "สรุปเดือนล่าสุด"
-if (/^(สรุปรายเดือน|สรุปเดือนนี้|รายเดือน|สรุปเดือนล่าสุด)$/i.test(text)) {
-  const uid = event.source?.userId;
-  if (!uid) {
-    return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ตรวจไม่พบ userId ของคุณ' });
+  if (/^(สรุปรายเดือน|สรุปเดือนนี้|รายเดือน|สรุปเดือนล่าสุด)$/i.test(text)) {
+    const uid = event.source?.userId;
+    if (!uid) {
+      return lineClient.replyMessage(event.replyToken, { type: 'text', text: 'ตรวจไม่พบ userId ของคุณ' });
+    }
+    await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังสรุปรายเดือนให้ครับ...' });
+    analyzeWithGeminiForUser(uid) // ✅ ใช้ฟังก์ชันที่มีอยู่จริง
+      .then(msg => lineClient.pushMessage(uid, { type: 'text', text: msg }))
+      .catch(err => lineClient.pushMessage(uid, {
+        type: 'text',
+        text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
+      }));
+    return;
   }
-  await lineClient.replyMessage(event.replyToken, { type: 'text', text: 'กำลังสรุปรายเดือนให้ครับ...' });
-  analyzeMonthlyWithGeminiForUser(uid, 2) // 2 เดือน: เดือนนี้เทียบเดือนก่อน
-    .then(msg => lineClient.pushMessage(uid, { type: 'text', text: msg }))
-    .catch(err => lineClient.pushMessage(uid, {
-      type: 'text',
-      text: `เรียก AI ไม่ได้: ${err?.response?.data?.error?.message || err.message || 'unknown'}`
-    }));
-  return;
-}
 
   if (/^(รายจ่าย|รายรับ)\b/i.test(text) && !(spendRegex.test(text) || incomeRegex.test(text))) {
     return lineClient.replyMessage(event.replyToken, {
