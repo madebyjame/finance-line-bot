@@ -528,23 +528,30 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const pieUrl    = buildQuickChartUrl(pieConfig,    { w: 900,  h: 900  });
   const catBarUrl = buildQuickChartUrl(catBarConfig, { w: 1000, h: 1100 });
 
-// === สร้างข้อความสรุปหมวดหมู่ ===
-const allCategories = Array.from(new Set([...Object.keys(catExpense), ...Object.keys(catIncome)]));
-const catSummaryLines = allCategories.map(name => {
-  const inc = catIncome[name]  || 0;
-  const exp = catExpense[name] || 0;
-  return `• ${name} — รับ ${pretty(inc)} บ. | จ่าย ${pretty(exp)} บ.`;
-});
+// === สร้างข้อความสรุปหมวดหมู่ แยกเป็น รายรับ / รายจ่าย ===
+const pretty = (n) => Number(n).toLocaleString();
 
-// === สร้าง note รวมทั้งหมด ===
+// เรียงหมวดตามยอดมากไปน้อย
+const incEntries = Object.entries(catIncome).sort((a, b) => b[1] - a[1]);
+const expEntries = Object.entries(catExpense).sort((a, b) => b[1] - a[1]);
+
+// จำกัดจำนวนแถวให้พอดีบนมือถือ (ถ้าเยอะเกิน)
+const MAX_SHOW = 8;
+const incLines = incEntries.slice(0, MAX_SHOW).map(([name, val]) => `• ${name}: +${pretty(val)} บ.`);
+const expLines = expEntries.slice(0, MAX_SHOW).map(([name, val]) => `• ${name}: -${pretty(val)} บ.`);
+
+// สรุปข้อความทั้งหมด (รวมเข้า note เดิม)
 const note = [
   `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
   `💚 รายรับรวม: ${pretty(sumIncome)} บาท`,
   `❤️ รายจ่ายรวม: ${pretty(sumExpense)} บาท`,
   `💰 คงเหลือ: ${pretty(balance)} บาท`,
   '',
-  '🧾 สรุปแต่ละหมวด:',
-  ...catSummaryLines
+  '💵 รายรับ:',
+  ...(incLines.length ? incLines : ['(ไม่มีรายรับในช่วงนี้)']),
+  '',
+  '🧾 รายจ่าย:',
+  ...(expLines.length ? expLines : ['(ไม่มีรายจ่ายในช่วงนี้)'])
 ].join('\n');
 
 
