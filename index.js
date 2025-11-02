@@ -5,7 +5,7 @@
  * - แดชบอร์ดพร้อมปุ่มช่วงเวลา (ต่อผู้ใช้)
  * - แยกข้อมูลเป็น "แท็บชีตต่อผู้ใช้" อัตโนมัติ
  */
-
+require('dotenv').config();
 const fs = require("fs");
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
   const path = "/tmp/google.json";
