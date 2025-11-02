@@ -543,9 +543,9 @@ const expLines = expEntriesSorted.slice(0, MAX_SHOW).map(([name, val]) => `• $
 // สรุปข้อความทั้งหมด (รวมเข้า note เดิม)
 const note = [
   `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
-  `💚 รายรับรวม: ${pretty(sumIncome)} บาท`,
-  `❤️ รายจ่ายรวม: ${pretty(sumExpense)} บาท`,
-  `💰 คงเหลือ: ${pretty(balance)} บาท`,
+  `รายรับรวม: ${pretty(sumIncome)} บาท`,
+  `รายจ่ายรวม: ${pretty(sumExpense)} บาท`,
+  `คงเหลือ: ${pretty(balance)} บาท`,
   '',
   '💵 รายรับ:',
   ...(incLines.length ? incLines : ['(ไม่มีรายรับในช่วงนี้)']),
@@ -614,16 +614,17 @@ async function analyzeWithGemini() {
     return `${date} | ${type} | ${amount} | ${category || '-'}`;
   }).join('\n');
 
-  const prompt = `
+const prompt = `
 ข้อมูลรายรับ-รายจ่ายล่าสุด:
 ${lines}
 
-โจทย์:
-1) สรุปเดือนล่าสุด: ใช้จ่ายหมวดไหนเยอะสุดและประมาณเท่าไหร่
-2) แนะนำแบบทำได้จริง 3 ข้อ
-3) ถ้าต้องการ DCA เดือนละ 3,000 บาท ควรตัดจากหมวดใดจึงกระทบน้อยที่สุด
-ย่อ กระชับ เป็น bullet และใส่ตัวเลขประมาณการ
+ช่วยสรุปภาพรวมให้สั้นๆ เหมือนเพื่อนที่เก่งการเงินพูดให้ฟัง:
+- เดือนล่าสุดใช้จ่ายหมวดไหนเยอะสุด และประมาณเท่าไหร่
+- คำแนะนำง่ายๆ ที่ทำได้จริง 2–3 ข้อ
+- ถ้าอยากเริ่มออมเดือนละ 3,000 บาท ควรลดจากหมวดไหนจะกระทบน้อยสุด
+ตอบสั้น กระชับ ใช้ภาษาคนทั่วไป เข้าใจง่าย
 `.trim();
+
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
@@ -659,25 +660,25 @@ async function analyzeWithGeminiForUser(userId) {
   const outlierLines = (facts.outliers || []).slice(0,5)
     .map(o => `${o.date} ${o.category} ${o.amount.toLocaleString()}`).join('\n') || '-';
 
-  const prompt = `
-คุณเป็นผู้ช่วยวิเคราะห์การเงินส่วนบุคคล ให้สรุปข้อมูลล่าสุดแบบอ่านง่าย ไม่ใช้ Markdown
-ข้อมูลแถวต่อแถว:
+const prompt = `
+ช่วยสรุปการเงินส่วนตัวให้เหมือนเพื่อนวิเคราะห์ให้ฟัง (พูดสั้นๆ เข้าใจง่าย)
+ข้อมูล:
 ${text}
 
-สรุปตัวเลขรวม (3 เดือนล่าสุด):
-- รายรับรวม: ${facts.totalIncome.toLocaleString()}
-- รายจ่ายรวม: ${facts.totalExpense.toLocaleString()}
-- คงเหลือรวม: ${(facts.balance).toLocaleString()}
-- เทียบเดือนต่อเดือน (keys: ${monthsKeys}) → รายรับ Δ ${momInc.toLocaleString()}, รายจ่าย Δ ${momExp.toLocaleString()}
-- หมวดใช้จ่ายนำ: ${topCats}
-- รายการเดี่ยวที่สูงกว่าปกติ (ตัวอย่าง): 
-${outlierLines}
+สรุปรวม (3 เดือนล่าสุด):
+- รายรับ: ${facts.totalIncome.toLocaleString()} บาท
+- รายจ่าย: ${facts.totalExpense.toLocaleString()} บาท
+- คงเหลือ: ${(facts.balance).toLocaleString()} บาท
+- หมวดใช้จ่ายเยอะสุด: ${topCats}
+- รายการเด่น: ${outlierLines}
 
-กรุณาตอบ:
-1) เดือนล่าสุดควรจับตาหมวดไหน เพราะอะไร (สั้น)
-2) คำแนะนำเชิงปฏิบัติ 2-3 ข้อ (ตั้งเพดาน/ลดความถี่/ย้ายเป็นคงที่ ฯลฯ)
-3) สรุปรวมว่า “ภาพรวมปกติ” หรือ “ควรปรับ” พร้อมเหตุผลสั้น ๆ
+ขอสรุปแบบสั้นๆ:
+1) หมวดไหนควรจับตา (พร้อมเหตุผล)
+2) แนะนำ 2–3 ข้อปรับตัวง่ายๆ
+3) สรุปว่า “ปกติ” หรือ “ควรปรับ” พร้อมกำลังใจตอนท้าย
+พูดแบบเพื่อน ไม่ต้องเป็นทางการ
 `.trim();
+
 
   for (const model of MODEL_LIST) {
     try {
