@@ -357,8 +357,7 @@ function buildQuickChartUrl(config, { w = 800, h = 400 } = {}) {
   return `${base}?c=${encodeURIComponent(JSON.stringify(config))}&w=${w}&h=${h}`;
 }
 
-// ============================ Mobile Modern Dashboard Chart ============================
-// ============================ Modern Mobile Dashboard with In-Chart Labels ============================
+// ============================ Modern Mobile Dashboard + Category Summary ============================
 async function buildDashboardImages(userId, rangeCode = '1m') {
   const rows = await readRecentRowsForUser(userId, 1000);
   if (!rows || rows.length === 0) return { note: 'ยังไม่มีข้อมูลเลยครับ ลองบันทึกก่อนนะ' };
@@ -371,7 +370,7 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const catExpense = {};
   for (const r of inRange) {
     const type = r[1];
-    const amt = Number(String(r[2] ?? '0').replace(/,/g, '')) || 0;
+    const amt = Number(String(r[2] ?? '0').toString().replace(/,/g, '')) || 0;
     const cat = r[3] || 'อื่นๆ';
     if (type === 'รายรับ') sumIncome += amt;
     else if (type === 'รายจ่าย') {
@@ -383,6 +382,15 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   const balance = sumIncome - sumExpense;
   const pretty = (n) => Number(n).toLocaleString();
 
+  // ✅ ทำสรุปยอดต่อหมวดหมู่ (เรียงจากมากไปน้อย)
+  const catEntries = Object.entries(catExpense).sort((a,b) => b[1] - a[1]);
+  const totalCat = catEntries.reduce((acc, [,v]) => acc + v, 0);
+  const catSummaryText = catEntries.length
+    ? 'สรุปรายจ่ายตามหมวด (มาก→น้อย)\n' + catEntries
+        .map(([name, val], i) => `${i+1}. ${name} — ${pretty(val)} บ. (${Math.round((val/totalCat)*100)}%)`)
+        .join('\n')
+    : 'ยังไม่มีรายจ่ายในช่วงเวลานี้';
+
   // 🎨 โทนสี
   const COLORS = {
     income: '#22C55E',  // เขียวสด
@@ -392,7 +400,7 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     bg: '#FFFFFF'
   };
 
-  // ==================== BAR CHART ====================
+  // ==================== BAR CHART (สรุปรายรับ/รายจ่ายรวม) ====================
   const barConfig = {
     type: 'bar',
     data: {
@@ -424,8 +432,8 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
   };
 
   // ==================== PIE CHART (ชื่อหมวดอยู่ในชิ้น) ====================
-  const pieLabels = Object.keys(catExpense);
-  const pieData = Object.values(catExpense);
+  const pieLabels = catEntries.map(([name]) => name);
+  const pieData = catEntries.map(([,val]) => val);
   const total = pieData.reduce((a, b) => a + b, 0);
   const pieColors = [
     '#60A5FA', '#34D399', '#FBBF24', '#F87171', '#A78BFA',
@@ -445,10 +453,10 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     },
     options: {
       plugins: {
-        legend: { display: false }, // 🔕 ซ่อน legend เพื่อให้ชัดในกราฟ
+        legend: { display: false }, // ซ่อน legend เพื่อเน้น label ในชิ้น
         datalabels: {
           display: true,
-          color: '#FFFFFF', // ตัวอักษรสีขาว
+          color: '#FFFFFF',
           font: { size: 36, weight: 'bold' },
           formatter: (v, ctx) => {
             const label = ctx.chart.data.labels[ctx.dataIndex];
@@ -460,8 +468,8 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
           callbacks: {
             label: (context) => {
               const label = context.label || '';
-              const value = context.formattedValue || '';
-              return `${label}: ${value} บาท`;
+              const value = context.parsed || 0;
+              return `${label}: ${pretty(value)} บาท`;
             }
           }
         }
@@ -471,9 +479,49 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     }
   };
 
+  // ==================== CATEGORY BAR (แนวนอน อ่านง่ายบนมือถือ) ====================
+  const catBarLabels = pieLabels;
+  const catBarData = pieData;
+  const catBarConfig = {
+    type: 'bar',
+    data: {
+      labels: catBarLabels.length ? catBarLabels : ['ไม่มีรายจ่าย'],
+      datasets: [{
+        label: 'ยอดรายจ่ายตามหมวด (บาท)',
+        data: catBarData.length ? catBarData : [1],
+        backgroundColor: '#3B82F6',
+        borderWidth: 2
+      }]
+    },
+    options: {
+      indexAxis: 'y', // แนวนอน
+      plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 28 }, color: COLORS.text } },
+        datalabels: {
+          display: true,
+          color: COLORS.text,
+          anchor: 'end',
+          align: 'right',
+          font: { size: 32, weight: 'bold' },
+          formatter: v => pretty(v)
+        }
+      },
+      scales: {
+        x: { ticks: { color: COLORS.text, font: { size: 26 } }, grid: { color: COLORS.grid } },
+        y: {
+          ticks: { color: '#111827', font: { size: 30 } }, // ชื่อหมวดตัวใหญ่
+          grid: { color: COLORS.grid }
+        }
+      },
+      layout: { padding: 24 },
+      backgroundColor: COLORS.bg
+    }
+  };
+
   // ==================== สร้างภาพ ====================
-  const barUrl = buildQuickChartUrl(barConfig, { w: 900, h: 700 }); // มือถือแนวนอน
-  const pieUrl = buildQuickChartUrl(pieConfig, { w: 900, h: 900 }); // วงกลมใหญ่เต็มจอมือถือ
+  const barUrl     = buildQuickChartUrl(barConfig,     { w: 900, h: 700 });
+  const pieUrl     = buildQuickChartUrl(pieConfig,     { w: 900, h: 900 });
+  const catBarUrl  = buildQuickChartUrl(catBarConfig,  { w: 1000, h: 1100 });
 
   const note = [
     `📅 ช่วง: ${start.toLocaleDateString('th-TH')} – ${end.toLocaleDateString('th-TH')}`,
@@ -482,8 +530,9 @@ async function buildDashboardImages(userId, rangeCode = '1m') {
     `💰 คงเหลือ: ${pretty(balance)} บาท`
   ].join('\n');
 
-  return { note, barUrl, pieUrl };
+  return { note, barUrl, pieUrl, catSummaryText: catSummaryText, catBarUrl };
 }
+
 
 
 
@@ -885,16 +934,18 @@ async function handleEvent(event) {
       }
 
       const userId = event.source?.userId || 'anonymous';
-      const dash = await buildDashboardImages(userId, range || '1m');
+const dash = await buildDashboardImages(userId, range || '1m');
 
-      const msgs = [];
-      if (dash.note)   msgs.push({ type: 'text',  text: dash.note });
-      if (dash.barUrl) msgs.push({ type: 'image', originalContentUrl: dash.barUrl, previewImageUrl: dash.barUrl });
-      if (dash.pieUrl) msgs.push({ type: 'image', originalContentUrl: dash.pieUrl, previewImageUrl: dash.pieUrl });
+const msgs = [];
+if (dash.note)            msgs.push({ type: 'text',  text: dash.note });
+if (dash.barUrl)          msgs.push({ type: 'image', originalContentUrl: dash.barUrl,    previewImageUrl: dash.barUrl });
+if (dash.pieUrl)          msgs.push({ type: 'image', originalContentUrl: dash.pieUrl,    previewImageUrl: dash.pieUrl });
+if (dash.catSummaryText)  msgs.push({ type: 'text',  text: dash.catSummaryText });
+if (dash.catBarUrl)       msgs.push({ type: 'image', originalContentUrl: dash.catBarUrl, previewImageUrl: dash.catBarUrl });
 
-      if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
-      return lineClient.replyMessage(event.replyToken, msgs);
-    }
+if (msgs.length === 0) msgs.push({ type: 'text', text: 'ไม่มีข้อมูลในช่วงเวลาที่เลือกครับ' });
+return lineClient.replyMessage(event.replyToken, msgs);
+
 
     return; // postback แต่ไม่เข้ากรณีไหน
   }
