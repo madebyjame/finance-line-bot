@@ -1,3 +1,5 @@
+check code อีกทีว่ามีบัคไหม
+
 /**
  * LINE Bot สำหรับบันทึกรายรับ-รายจ่าย อัตโนมัติลงใน Google Sheets
  * - บันทึกรายรับ/รายจ่ายจากแชต (รองรับเลขใหญ่/คอมม่า)
@@ -43,9 +45,6 @@ if (process.env.GOOGLE_CREDENTIALS_JSON) {
 require('dotenv').config();
 const express = require('express');
 const { Client, middleware } = require('@line/bot-sdk');
-const { google } = require('googleapis');
-const axios = require('axios');
-
 const app = express();
 
 const lineConfig = {
@@ -192,15 +191,6 @@ async function buildMonthlyFactsForUser(userId, months = 2) {
 }
 
 // ============================ END PER-USER SHEET HELPERS ============================
-
-// แปลงวันที่ไทย → YYYY-MM (คีย์รายเดือน)
-function monthKeyFromThaiDate(s) {
-  const d = parseThaiDate(s);
-  if (!d) return 'unknown';
-  const y = d.getFullYear();
-  const m = (d.getMonth()+1).toString().padStart(2, '0');
-  return `${y}-${m}`;
-}
 
 // สร้างข้อเท็จจริง (facts) สำหรับช่วง N เดือนล่าสุด
 async function buildFinanceFactsForUser(userId, months = 3) {
@@ -536,39 +526,45 @@ async function analyzeWithGeminiForUser(userId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน .env นะ';
 
-  // รวบรวม facts 3 เดือนล่าสุด (ปรับได้)
+  // ใช้ facts 3 เดือนล่าสุด
   const { facts, text } = await buildFinanceFactsForUser(userId, 3);
   if (!facts) return 'ยังไม่มีข้อมูลของคุณเลยครับ ลองบันทึกก่อนนะ';
 
-  // บล็อกป้องกัน “แนะนำลดยอดเล็กๆ”
-  const rules = facts.rules;
-  const safeCats = rules.ESSENTIAL_CATEGORIES;
+  // สร้างสรุปตัวเลขสำหรับ prompt
+  const monthsKeys = facts?.monthOverMonth ? [facts.monthOverMonth.prev?.key, facts.monthOverMonth.last?.key].filter(Boolean).join(' → ') : '-';
+  const momInc = facts?.monthOverMonth ? facts.monthOverMonth.diff.income : 0;
+  const momExp = facts?.monthOverMonth ? facts.monthOverMonth.diff.expense : 0;
+
+  const topCats = (facts.categoryShares || []).slice(0, 5)
+    .map(x => `${x.category}:${Math.round(x.sum).toLocaleString()}(${Math.round(x.share*100)}%)`).join(', ') || '-';
+
+  const outlierLines = (facts.outliers || []).slice(0,5)
+    .map(o => `${o.date} ${o.category} ${o.amount.toLocaleString()}`).join('\n') || '-';
 
   const prompt = `
-คุณเป็นผู้จัดการการเงินส่วนบุคคล ทำสรุปรายเดือนจากตารางด้านล่าง
-ให้สรุปเฉพาะ "รายเดือน" เน้นความจริงตามตัวเลข และแนะนำแบบทำได้จริง
-ห้ามใส่สัญลักษณ์ Markdown เช่น **, __, *, _, • ให้ตอบเป็นข้อความธรรมดาเท่านั้น
+คุณเป็นผู้ช่วยวิเคราะห์การเงินส่วนบุคคล ให้สรุปข้อมูลล่าสุดแบบอ่านง่าย ไม่ใช้ Markdown
+ข้อมูลแถวต่อแถว:
+${text}
 
-= ตารางสรุปรายเดือน (ล่าสุด ${months} เดือน) =
-${tableLines}
+สรุปตัวเลขรวม (3 เดือนล่าสุด):
+- รายรับรวม: ${facts.totalIncome.toLocaleString()}
+- รายจ่ายรวม: ${facts.totalExpense.toLocaleString()}
+- คงเหลือรวม: ${(facts.balance).toLocaleString()}
+- เทียบเดือนต่อเดือน (keys: ${monthsKeys}) → รายรับ Δ ${momInc.toLocaleString()}, รายจ่าย Δ ${momExp.toLocaleString()}
+- หมวดใช้จ่ายนำ: ${topCats}
+- รายการเดี่ยวที่สูงกว่าปกติ (ตัวอย่าง): 
+${outlierLines}
 
-= สรุปเทียบเดือนต่อเดือน (MoM) =
-${mom}
-
-= งานที่ต้องตอบ =
-1) สรุปสั้น ๆ ว่าเดือนล่าสุด รายรับ-รายจ่าย-คงเหลือ เท่าไหร่ (ระบุเดือน)
-2) ระบุหมวดใช้เงินสูงสุดของเดือนล่าสุด (ระบุจำนวนโดยประมาณ)
-3) เปรียบเทียบกับเดือนก่อน: ใช้มากขึ้น/น้อยลงด้านไหนบ้าง
-4) ให้คำแนะนำ 2-3 ข้อที่ทำได้จริงในเดือนถัดไป (เช่น ตั้งเพดานหมวด, เปลี่ยนความถี่, ย้ายค่าใช้จ่ายคงที่)
-5) ถ้าโดยรวมปกติดี ให้บอกว่า "ภาพรวมปกติ" ชัดเจน
-
-ตอบเป็นภาษาไทยแบบอ่านง่าย ใช้ย่อหน้าและขีดกลาง (-) ธรรมดาแยกบรรทัด ไม่ใช้ตัวหนาหรือสัญลักษณ์พิเศษ
+กรุณาตอบ:
+1) เดือนล่าสุดควรจับตาหมวดไหน เพราะอะไร (สั้น)
+2) คำแนะนำเชิงปฏิบัติ 2-3 ข้อ (ตั้งเพดาน/ลดความถี่/ย้ายเป็นคงที่ ฯลฯ)
+3) สรุปรวมว่า “ภาพรวมปกติ” หรือ “ควรปรับ” พร้อมเหตุผลสั้น ๆ
 `.trim();
 
   for (const model of MODEL_LIST) {
     try {
-      const text = await callGeminiModel({ model, apiKey, prompt });
-      return text;
+      const msg = await callGeminiModel({ model, apiKey, prompt });
+      return msg;
     } catch (e) {
       const status = e?.response?.status;
       if ([404,429,500,502,503,504].includes(status)) continue;
@@ -577,6 +573,7 @@ ${mom}
   }
   return 'Gemini ช้า/ล่มชั่วคราว ลองใหม่อีกครั้งครับ';
 }
+
 
 
 // 🎨 Flex UI
@@ -626,8 +623,9 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
         type: 'box', layout: 'horizontal', spacing: 'md', contents: [
           { type: 'button', style: 'primary', color: THEME.accent, height: 'sm',
             action: { type: 'postback', label: 'บันทึก', data: payload, displayText: 'บันทึก' } },
-          { type: 'button', style: 'secondary', color: THEME.accentSoft, height: 'sm',
-            action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
+             { type: 'button', style: 'link',
+                    action: { type: 'postback', label: 'ยกเลิก', data: 'action=cancel', displayText: 'ยกเลิก' } }
+
         ]
       }
     }
@@ -660,15 +658,12 @@ function buildDashboardMenuFlex() {
         paddingAll: '16px',
         contents: [
           { type: 'box', layout: 'horizontal', spacing: '8px', contents: [
-            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
-            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } }
-          ]},
-          { type: 'box', layout: 'horizontal', spacing: '8px', contents: [
-            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
-            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } }
-          ]},
-          { type: 'box', layout: 'horizontal', contents: [
-            { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } }
+  { type: 'button', style: 'link', action: { type: 'postback', label: '1 year',  data: 'action=dash&range=1y' } },
+{ type: 'button', style: 'link', action: { type: 'postback', label: '6 เดือน', data: 'action=dash&range=6m' } },
+{ type: 'button', style: 'link', action: { type: 'postback', label: '3 เดือน', data: 'action=dash&range=3m' } },
+{ type: 'button', style: 'link', action: { type: 'postback', label: '1 เดือน', data: 'action=dash&range=1m' } },
+{ type: 'button', style: 'link', action: { type: 'postback', label: '1 week', data: 'action=dash&range=1w' } },
+
           ]}
         ]
       },
