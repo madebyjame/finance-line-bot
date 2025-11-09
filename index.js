@@ -901,6 +901,18 @@ function confirmFlex({ type, amount, category, note, date, payload }) {
         ]
       },
       footer: {
+      
+  type: 'button',
+  style: 'secondary',
+  color: '#4F46E5',
+  height: 'sm',
+  action: {
+    type: 'postback',
+    label: 'เปลี่ยนหมวด',
+    data: `action=select_category&type=${type}&amount=${amount}&note=${encodeURIComponent(note)}`
+  }
+}
+
         type: 'box',
         layout: 'horizontal',
         spacing: 'md',
@@ -1084,6 +1096,46 @@ async function handleEvent(event) {
       }
       return;
     }
+if (action === 'select_category') {
+  const type = p.get('type');
+  const amount = p.get('amount');
+  const note = decodeURIComponent(p.get('note') || '');
+  
+  // สร้าง Flex เมนูให้เลือกหมวด
+  const categories = [
+    'อาหาร/กาแฟ', 'เดินทาง', 'บิล/สาธารณูปโภค', 'ช้อปปิ้ง/ของใช้',
+    'สุขภาพ/ประกัน', 'การศึกษา/งาน', 'บันเทิง', 'อื่นๆ'
+  ];
+  const buttons = categories.map(cat => ({
+    type: 'button',
+    style: 'secondary',
+    height: 'sm',
+    action: {
+      type: 'postback',
+      label: cat,
+      data: `action=confirm_category&type=${type}&amount=${amount}&category=${encodeURIComponent(cat)}&note=${encodeURIComponent(note)}`
+    }
+  }));
+
+  const flex = {
+    type: 'flex',
+    altText: 'เลือกหมวดหมู่',
+    contents: {
+      type: 'bubble',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          { type: 'text', text: 'เลือกหมวดหมู่', weight: 'bold', size: 'md' },
+          ...buttons
+        ]
+      }
+    }
+  };
+
+  return lineClient.replyMessage(event.replyToken, flex);
+}
 
     // ===== Dash range & export =====
     if (action === 'dash') {
